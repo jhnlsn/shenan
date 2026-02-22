@@ -1,20 +1,22 @@
 # shenan
 
-> *From Irish/Gaelic — Sionainn, the River Shannon, named for a goddess who sought forbidden knowledge. Also: mischief happening just out of sight.*
+> *From Irish Sionainn (the River Shannon, goddess who sought forbidden knowledge) — a blind pipe for secrets.*
 
-Decentralized, ephemeral secret distribution for developers. No servers hold your secrets. No relay knows who you are. No ciphertext is ever stored.
+Shenan is a decentralized, ephemeral relay for sharing secrets between developers. It has one job: move an encrypted secret from one machine to another without ever seeing what's inside.
 
 ```bash
-# Send a secret to a teammate
-shenan send --to github:alice DATABASE_URL=postgres://prod:5432/mydb
+# Alice sends a secret to Bob
+shenan send --to github:bob DATABASE_URL=postgres://prod:5432/mydb
 
-# Receive a secret from a trusted sender
-shenan receive --from github:bob
+# Bob receives it (must be online simultaneously)
+shenan receive --from github:alice
 ```
+
+No secrets are stored anywhere. Not on the relay, not in a database, not in transit buffers. Both parties must be online at the same time. The relay is a blind pipe, not a mailbox.
 
 ---
 
-## The Problem
+## Why
 
 Every team has the same moment: someone generates a production secret and now has to get it to the people who need it. The options are all bad.
 
@@ -24,58 +26,106 @@ Every team has the same moment: someone generates a production secret and now ha
 
 The centralized model has a deeper problem: stored ciphertext is harvestable. Even if it can't be decrypted today, a sufficiently motivated adversary stores it and waits. This is the **harvest now, decrypt later** attack, and it's not theoretical — it's happening now.
 
-## The Shenan Approach
+Shenan is different in one specific way: **the relay is architecturally incapable of reading or retaining your secrets.** There is no database. There are no stored ciphertexts. The relay does not know who is talking to whom. By the time a secret has been transmitted, the relay has already forgotten everything about the transaction.
 
-Shenan borrows from how Signal and WhatsApp handle secure messaging and applies it to developer secret distribution.
+---
 
-- **End-to-end encrypted** — secrets are encrypted on your machine to the recipient's public key. The relay sees opaque bytes it cannot read.
-- **Ephemeral by design** — the relay is a pipe, not a mailbox. Nothing is stored, queued, or logged. A secret exists in transit only — milliseconds, not minutes.
-- **Identity-blind routing** — the relay verifies you are a legitimate GitHub user but immediately forgets who you are. It routes anonymous connections, not named ones.
-- **Zero harvest surface** — there is no ciphertext to harvest. Ever. The attack doesn't apply.
-- **Client-side trust** — your friends list lives on your machine. The relay never knows the relationship between any two parties.
-- **Self-hostable relay** — run your own relay on a $5 VPS. Single binary, zero config, no database.
-- **Fully open source** — the relay is AGPL v3, the CLI is MIT. The security guarantees are in the code, not in a policy document.
+## How it works
 
-## How It Works
+### Identity via GitHub
+
+Authentication uses your existing GitHub SSH keys. No new accounts, no new keypairs.
 
 ```
-┌─────────────────┐                              ┌─────────────────┐
-│   Bob's CLI     │                              │   Alice's CLI   │
-│                 │                              │                 │
-│ 1. Fetch Alice's│                              │ 1. Fetch Bob's  │
-│    pubkey from  │                              │    pubkey from  │
-│    GitHub       │                              │    GitHub       │
-│                 │                              │                 │
-│ 2. Derive anon  │◄──── same channel token ────►│ 2. Derive same  │
-│    channel from │      (no coordination        │    channel from │
-│    both pubkeys │       needed)                │    both pubkeys │
-│    + time window│                              │    + time window│
-│                 │                              │                 │
-│ 3. Encrypt      │                              │                 │
-│    payload to   │                              │                 │
-│    Alice's key  │                              │                 │
-│                 │          Relay               │                 │
-│ 4. Connect ─────┼──────── (blind pipe) ────────┼───── Connect    │
-│    present proof│  verifies both proofs        │     present     │
-│                 │  opens pipe                  │     proof       │
-│                 │  forgets immediately         │                 │
-│ 5. Send ────────┼─────── bytes flow ──────────►│ 5. Receive      │
-│                 │  relay never held them       │                 │
-│                 │                              │ 6. Decrypt with │
-│                 │                              │    private key  │
-│                 │                              │                 │
-│                 │                              │ 7. Write to     │
-│                 │                              │    .env ✓       │
-└─────────────────┘                              └─────────────────┘
+you                    relay                    colleague
+ |                       |                          |
+ |-- connect (WSS) ----> |                          |
+ |<- challenge nonce --- |                          |
+ |-- sign(nonce) ------> |                          |
+ |   relay verifies via github.com/you.keys         |
+ |   GitHub username discarded immediately          |
+ |<- ephemeral_id ------ |                          |
 ```
 
-The channel token is derived independently by both parties from their public keys and the current time window — no coordination, no out-of-band token exchange. The relay verifies cryptographic proofs that both parties belong to the channel before opening the pipe, preventing slot-occupancy attacks.
+After authentication, the relay knows nothing about your identity. It holds only an ephemeral ID linked to your socket connection.
 
-## Security Properties
+### Channel derivation (client-side only)
+
+Both parties independently derive the same channel token from their public keys and the current hour. No coordination required — the math produces the same result on both ends.
+
+```
+channel_token = HKDF-SHA256(
+  ikm  = sender_pubkey || recipient_pubkey,
+  info = "shenan-channel-v1:" || direction || ":" || window,
+  len  = 32 bytes
+)
+```
+
+Tokens rotate every hour. A captured token is useless after 60 minutes. The relay sees only the token — it never learns whose keys produced it or what relationship those keys have.
+
+### Transmission
+
+```
++-------------------+                              +-------------------+
+|   Bob's CLI       |                              |   Alice's CLI     |
+|                   |                              |                   |
+| 1. Fetch Alice's  |                              | 1. Fetch Bob's    |
+|    pubkey from    |                              |    pubkey from    |
+|    GitHub         |                              |    GitHub         |
+|                   |                              |                   |
+| 2. Derive anon    |<---- same channel token ---->| 2. Derive same    |
+|    channel from   |      (no coordination        |    channel from   |
+|    both pubkeys   |       needed)                |    both pubkeys   |
+|    + time window  |                              |    + time window  |
+|                   |                              |                   |
+| 3. Encrypt        |                              |                   |
+|    payload to     |                              |                   |
+|    Alice's key    |                              |                   |
+|                   |          Relay               |                   |
+| 4. Connect -------+-------- (blind pipe) --------+------- Connect   |
+|    present proof  |  verifies both proofs        |     present       |
+|                   |  opens pipe                  |     proof         |
+|                   |  forgets immediately         |                   |
+| 5. Send ----------+--------- bytes flow -------->| 5. Receive        |
+|                   |  relay never held them       |                   |
+|                   |                              | 6. Decrypt with   |
+|                   |                              |    private key    |
+|                   |                              |                   |
+|                   |                              | 7. Write to       |
+|                   |                              |    .env           |
++-------------------+                              +-------------------+
+```
+
+The relay admits two connections presenting complementary proofs for the same channel, opens a bidirectional pipe, streams the bytes, and immediately forgets everything.
+
+### End-to-end encryption
+
+Secrets never touch the relay as plaintext. Before sending:
+
+1. Sender fetches recipient's public key from `github.com/recipient.keys`
+2. Generates a fresh ephemeral keypair (forward secrecy)
+3. Encrypts the payload locally (X25519 + ChaCha20-Poly1305)
+4. Transmits ciphertext through the relay pipe
+
+The relay carries encrypted bytes it cannot read.
+
+### Trust model
+
+Shenan maintains a local friends list at `~/.shenan/trusted_senders.toml`. Payloads from unknown senders are dropped silently before decryption. This prevents social engineering attacks even if the relay is compromised.
+
+```bash
+shenan trust add github:alice
+shenan trust list
+```
+
+---
+
+## Security properties
 
 | Property | Guarantee |
 |---|---|
 | Encryption | End-to-end, client-side only |
+| Forward secrecy | Fresh ephemeral keypair per send |
 | Relay knowledge | Anonymous ephemeral IDs only |
 | Relationship graph | Never constructed, never stored |
 | Ciphertext at rest | Structurally impossible |
@@ -83,7 +133,7 @@ The channel token is derived independently by both parties from their public key
 | Post-quantum readiness | Hybrid X25519 + ML-KEM (roadmap) |
 | Relay compromise impact | Zero — nothing to learn, nothing to steal |
 
-## What a Fully Compromised Relay Reveals
+### What a fully compromised relay reveals
 
 Even with complete real-time memory access an attacker sees:
 
@@ -93,21 +143,23 @@ Even with complete real-time memory access an attacker sees:
 
 An attacker **cannot** determine who is talking to whom, what relationship exists between any two parties, what the bytes contain, or anything useful for a harvest-now-decrypt-later attack.
 
-## Getting Started
+---
+
+## Getting started
 
 ```bash
 # Install
 brew install shenan        # macOS
-cargo install shenan       # from source
+go install github.com/jhnlsn/shenan/cli/cmd/shenan@latest  # from source
 
-# Initialize — generates your local keypair
+# Initialize — discover your local SSH keys, select identity
 shenan init
 
 # Add trusted senders (stored locally, never leaves your machine)
 shenan trust add github:alice
 shenan trust add github:bob
 
-# Send a secret
+# Send a secret (blocks until recipient connects)
 shenan send --to github:alice API_KEY=sk-abc123
 
 # Send multiple secrets
@@ -116,43 +168,55 @@ shenan send --to github:alice \
   REDIS_URL=redis://... \
   API_KEY=sk-abc123
 
-# Receive (run this when someone tells you they're sending)
+# Send from a file
+shenan send --to github:alice --from-file .env.production
+shenan send --to github:alice < .env.production
+
+# Receive (blocks until sender connects)
 shenan receive --from github:bob
 
 # Receive and write directly to .env
 shenan receive --from github:bob --out .env
 
-# List your trusted senders
+# List trusted senders
 shenan trust list
 
 # Remove a trusted sender
 shenan trust remove github:mallory
 ```
 
-## Self-Hosting the Relay
+---
+
+## Self-hosting the relay
 
 ```bash
 # Docker
-docker run -p 8080:8080 ghcr.io/jhnlsn/shenan-relay
+docker run -p 443:443 ghcr.io/jhnlsn/shenan-relay
 
 # Binary
-shenan-relay --port 8080
+shenan relay start --port 443 --tls-cert cert.pem --tls-key key.pem
 
 # Point your CLI at it
 shenan config set relay wss://your-relay.example.com
+
+# Or per-command
+shenan send --relay wss://relay.yourcompany.com --to github:bob SECRET=value
 ```
 
-The relay has no configuration file, no database, no persistent state. Restarting it loses nothing — there was nothing to keep.
+The relay has no configuration file, no database, no persistent state. It is safe to restart at any time — there was nothing to keep. Multiple independent relays can coexist; clients choose which relay to use.
 
-## Project Structure
+---
+
+## Project structure
 
 ```
 shenan/
-  cli/      # The shenan CLI (MIT License)
-  relay/    # The shenan relay server (AGPL v3)
+  cli/      # The shenan CLI (Go, MIT License)
+  relay/    # The shenan relay server (Go, AGPL v3)
   spec/     # Protocol specification (CC0)
-  docs/     # Documentation
 ```
+
+The relay and CLI are intentionally separate binaries with separate licenses. The relay is meant to be auditable and forkable under AGPL. The CLI is meant to be embeddable anywhere under MIT.
 
 ## Licenses
 
@@ -166,9 +230,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Status
 
-🚧 **Pre-alpha — specification phase**
-
-The protocol is designed. Implementation is beginning. See [SPEC.md](SPEC.md) for the full technical specification.
+Pre-alpha — specification phase. The protocol is designed. Implementation is beginning. See [SPEC.md](SPEC.md) for the full technical specification.
 
 ---
 
