@@ -150,7 +150,7 @@ An attacker **cannot** determine who is talking to whom, what relationship exist
 ```bash
 # Install
 brew install shenan        # macOS
-go install github.com/jhnlsn/shenan/cli/cmd/shenan@latest  # from source
+cargo install shenan  # from source
 
 # Initialize — discover your local SSH keys, select identity
 shenan init
@@ -211,8 +211,8 @@ The relay has no configuration file, no database, no persistent state. It is saf
 
 ```
 shenan/
-  cli/      # The shenan CLI (Go, MIT License)
-  relay/    # The shenan relay server (Go, AGPL v3)
+  cli/      # The shenan CLI (Rust, MIT License)
+  relay/    # The shenan relay server (Rust, AGPL v3)
   spec/     # Protocol specification (CC0)
 ```
 

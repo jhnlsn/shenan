@@ -24,7 +24,7 @@ This document is the authoritative specification for the Shenan protocol. Any co
 12. [CLI Specification](#12-cli-specification)
 13. [Security Analysis](#13-security-analysis)
 14. [Implementation Notes](#14-implementation-notes)
-15. [Open Questions](#15-open-questions)
+15. [POC Decisions and Future Work](#15-poc-decisions-and-future-work)
 
 ---
 
@@ -43,28 +43,34 @@ A conforming Shenan relay:
 - Cannot correlate any two sessions to the same pair of parties
 - Forgets everything about a transmission immediately upon completion
 
-These are not aspirational goals — they are verifiable architectural constraints. A conforming relay has no code path that stores, logs, or inspects payload content. Security guarantees are **structural**, not operational. They are enforced by what code exists, not by policy. An auditor can verify them by reading the source, not by trusting a document.
+These are not aspirational goals — they are verifiable architectural constraints. A conforming relay has no code path that stores, logs, or inspects payload content. Security guarantees are **structural**, not operational — they are enforced by what code exists, not by policy. An auditor can verify them by reading the source, not by trusting a document.
+
+**Caveat:** During authentication (§6), the relay necessarily learns the client's GitHub username and public key in order to verify identity. A conforming relay discards this information immediately after verification. The structural guarantee begins *after* authentication — from that point forward, the relay holds no identity information, only anonymous ephemeral IDs and bare public keys (during the brief channel admission window) with no username attached.
 
 ---
 
 ## 2. Threat Model
 
+### POC trust assumptions
+
+The POC assumes a **trusted relay** operated at `wss://relay.shenan.dev`. The relay is trusted to execute the protocol correctly: discard identity data after authentication, not inspect or substitute payloads, and not retain relationship information. Self-hosted relays are supported but the operator is assumed to be trusted by both parties.
+
+A future iteration will add zero-trust relay support (payload signing, relay-blind channel derivation) so that even a fully malicious relay cannot compromise confidentiality, authenticity, or relationship privacy. See §15.
+
 ### What shenan protects against
 
 - **Harvest now, decrypt later (HNDL)** — No ciphertext is ever stored on any server. There is nothing to harvest.
-- **Relay compromise** — Even complete real-time memory access to a running relay reveals no useful information about who is communicating with whom, or what is being transmitted.
-- **Relay operator surveillance** — The relay is architecturally incapable of constructing a relationship graph between users.
-- **Slot-occupancy attacks** — A malicious party cannot occupy a channel slot to block a legitimate transaction (see §8).
+- **Third-party eavesdropping** — End-to-end encryption ensures only the intended recipient can read the payload.
+- **Channel squatting** — Channel tokens include a Diffie-Hellman shared secret that third parties cannot compute, even if they know both public keys (see §7.2).
 - **Replay attacks** — Channel tokens rotate hourly. Captured tokens are useless after the current window expires.
 - **Injection attacks** — The client-side friends list means only trusted senders can deliver secrets to your environment.
 
 ### What shenan does not protect against
 
 - **Endpoint compromise** — If Alice's or Bob's machine is compromised, secrets on that machine are exposed. This is true of all cryptographic systems.
-- **GitHub compromise** — Identity is anchored to GitHub public keys. A compromised GitHub account can authenticate to the relay as that user. However, key substitution only affects future sessions (there is nothing stored), and the local trust list provides a second layer of defense.
-- **Malicious relay disruption** — A malicious relay can drop connections or delay transmission (denial of service), but it cannot read secrets or learn identities.
+- **GitHub compromise** — Identity is anchored to GitHub public keys. A compromised GitHub account can authenticate to the relay as that user. The local trust list provides a second layer of defense.
+- **Malicious relay (deferred)** — The POC trusts the relay. A malicious relay could theoretically substitute payloads, retain identity mappings, or observe the relationship graph. These attacks will be addressed in a future zero-trust relay iteration.
 - **Traffic analysis at scale** — An adversary with access to network-level metadata (timing, packet sizes, connection origins) could potentially correlate sessions. This is a network-layer problem outside shenan's scope.
-- **Quantum attacks on stored secrets** — Shenan eliminates stored ciphertext, making harvest-and-decrypt-later attacks impossible. However, secrets stored locally after receipt are only as protected as the user's local storage.
 
 ---
 
@@ -97,7 +103,7 @@ Shenan uses SSH public keys as the identity primitive. GitHub exposes these at `
 - Developers already maintain these keys
 - The key registry is decentralized from shenan's perspective (GitHub is a pre-existing trust anchor developers already use)
 
-Implementations MUST support Ed25519 and RSA keys. They SHOULD support ECDSA keys. They MAY support other key types. Ed25519 is preferred.
+Shenan requires Ed25519 keys. Both parties MUST have an Ed25519 SSH key registered on GitHub. Support for other key types (RSA, ECDSA) may be added in a future version.
 
 ---
 
@@ -115,7 +121,7 @@ This endpoint returns one or more public keys in OpenSSH authorized_keys format 
 
 ### Key selection
 
-If a user has multiple keys, the CLI selects the Ed25519 key if present, otherwise falls back to ECDSA, then RSA. The user may override key selection explicitly.
+If a user has multiple keys, the CLI selects the Ed25519 key. If no Ed25519 key is found, the CLI MUST fail with a clear error.
 
 ### Local identity
 
@@ -150,30 +156,23 @@ Client                                   Relay
   |     "signature":"<base64>"}        --> |
   |                                        | verify signature
   |                                        | discard: user, pubkey
-  |                                        | generate: ephemeral_id (random 32 bytes)
-  |<-- {"type":"authenticated",            |
-  |     "ephemeral_id":"<hex>"}        --- |
+  |                                        | mark connection as authenticated
+  |<-- {"type":"authenticated"}        --- |
 ```
 
 ### 6.3 Key fetching
 
-The relay fetches public keys from `https://github.com/{username}.keys`. If the fetch fails or returns no keys, the relay returns `{"type":"error","code":"auth_failed"}` and closes the connection.
+The relay fetches public keys from `https://github.com/{username}.keys`. The relay MUST validate the username against `^[a-zA-Z0-9\-]+$` (GitHub's username rules) before constructing the URL, to prevent SSRF via path traversal. If validation fails, the fetch fails, or the response contains no Ed25519 keys, the relay returns `{"type":"error","code":"auth_failed"}` and closes the connection.
 
 ### 6.4 Challenge construction
 
 The nonce is 32 cryptographically random bytes encoded as lowercase hex. The challenge MUST be unique per connection attempt.
 
-The relay MAY select one specific key from the user's key list and include its fingerprint in the challenge message, allowing the client to select the correct private key. The relay MUST verify against the indicated key only.
-
-Alternatively, the relay MAY issue a challenge valid for any of the user's keys. In this case, the relay verifies the signature against each key in sequence and accepts if any match.
+The relay selects the user's Ed25519 key from the fetched key list and includes its fingerprint in the challenge message, allowing the client to select the correct private key.
 
 ### 6.5 Signature verification
 
-The client signs `SHA256(nonce_bytes)` with its private key. The relay verifies with the corresponding public key.
-
-For Ed25519: standard EdDSA signature over the digest.
-For RSA: RSASSA-PKCS1-v1_5 with SHA-256.
-For ECDSA: standard ECDSA over the digest.
+The client signs `SHA256(nonce_bytes)` with its Ed25519 private key. The relay verifies with the corresponding public key using standard EdDSA verification.
 
 ### 6.6 Post-authentication state
 
@@ -181,11 +180,8 @@ After successful authentication:
 
 1. The relay MUST discard the GitHub username from memory
 2. The relay MUST discard the public key from memory
-3. The relay stores only: `{ ephemeral_id -> { socket, expires_at } }`
-4. `expires_at` is `now + session_expiry` (default 10 minutes, configurable)
-5. The `ephemeral_id` MUST be 32 cryptographically random bytes, independent of the user's identity
-
-The relay MUST NOT log the association between `ephemeral_id` and GitHub username.
+3. The relay marks the WebSocket connection as authenticated with an expiry of `now + session_expiry` (default 10 minutes, configurable)
+4. The relay identifies sessions by their socket connection, not by a bearer token
 
 On failure: connection dropped, no state retained.
 
@@ -206,22 +202,24 @@ Channel tokens allow two parties to rendezvous on the relay without the relay kn
 ### 7.2 Token computation
 
 ```
-window        = floor(unix_timestamp_seconds / 3600)
-channel_token = HKDF-SHA256(
-  ikm    = canonical_pubkey(sender) || canonical_pubkey(recipient),
+window         = floor(unix_timestamp_seconds / 3600)
+shared_secret  = X25519(my_ed25519_private, other_ed25519_public)
+channel_token  = HKDF-SHA256(
+  ikm    = shared_secret || canonical_pubkey(sender) || canonical_pubkey(recipient),
   salt   = nil,
-  info   = "shenan-channel-v1:" || direction || ":" || decimal(window),
+  info   = "shenan-channel-v1:s2r:" || decimal(window),
   length = 32 bytes
 )
 ```
 
 Where:
-- `direction` is the ASCII string `"s2r"` (sender to receiver) or `"r2s"` (receiver to sender)
+- `shared_secret` is a Diffie-Hellman shared secret computed via X25519 between the two parties' Ed25519 keys. Both parties compute the same value: `X25519(a_private, b_public) == X25519(b_private, a_public)`. This ensures that only someone holding one of the two private keys can derive the channel token — third parties who know both public keys cannot.
 - `canonical_pubkey(k)` is the SSH wire format encoding of key `k` (the binary blob, not base64)
 - `||` denotes concatenation
 - `decimal(n)` is the base-10 ASCII representation of the integer
+- The direction string `"s2r"` is fixed — both parties use the same direction, producing an identical token
 
-The sender computes the token with `direction="s2r"`. The receiver computes the complementary token with `direction="r2s"`. Both tokens are presented to the relay, which verifies that they are complementary (derived from the same pair of keys in opposite directions for the same window).
+Both parties know the sender's pubkey and the recipient's pubkey (fetched from GitHub). Both know which role they are in (sender or recipient), so both independently construct the same `ikm` with the same key ordering. The X25519 shared secret is identical regardless of which side computes it. The result is that both parties derive the **same** channel token without any coordination, and no third party can compute or predict the token.
 
 ### 7.3 Channel proof
 
@@ -231,19 +229,46 @@ Each party generates a proof that they hold the private key corresponding to one
 channel_proof = Sign(SHA256(channel_token), my_private_key)
 ```
 
-The signing algorithm matches the key type (Ed25519, RSA-SHA256, ECDSA).
+The signature uses Ed25519 (EdDSA).
 
 ### 7.4 Relay verification
 
-When the relay receives `(channel_token, channel_proof, ephemeral_id)`:
+The client includes its public key in the channel join message:
 
-1. Check that `ephemeral_id` corresponds to an authenticated session
-2. Check that no channel entry already exists for this `channel_token` (first arrival) or that a pending entry exists (second arrival)
-3. Verify that `channel_proof` is a valid signature over `SHA256(channel_token)`
+```
+Client → Relay: {
+  channel_token,    // derived in §7.2
+  channel_proof,    // signature over SHA256(channel_token)
+  pubkey            // the client's SSH public key (raw bytes)
+}
+```
 
-The relay cannot verify *which* public key was used to generate the signature, because the relay does not know the public keys — it only knows the ephemeral IDs. The proof verifies that the presenter has a consistent private key; the relay trusts that the token derivation math ensures only the correct parties can produce matching tokens.
+The relay identifies the client by its WebSocket connection, not by a bearer token.
 
-This is a deliberate trade-off: the relay gains zero knowledge about identities in exchange for delegating proof validity to the cryptographic properties of the token derivation.
+**On first arrival**, the relay:
+
+1. Checks that the connection corresponds to an authenticated session
+2. Checks that no pending channel entry exists for this `channel_token`
+3. Verifies `channel_proof` is a valid signature over `SHA256(channel_token)` using the provided `pubkey`
+4. Stores: `{ channel_token -> { proof, pubkey_1, ephemeral_id, arrived_at } }`
+
+**On second arrival**, the relay:
+
+1. Checks that the connection corresponds to an authenticated session
+2. Looks up the pending entry for this `channel_token`
+3. Verifies `channel_proof` is a valid signature over `SHA256(channel_token)` using the provided `pubkey`
+4. Performs the **admission check**:
+
+```
+check_1: pubkey_1 ≠ pubkey_2    // two distinct parties
+```
+
+The channel token includes a Diffie-Hellman shared secret (§7.2) that only the two legitimate parties can compute. This makes the token unguessable by third parties, preventing channel squatting at the derivation level. The relay does not need to re-derive the token — the cryptographic properties of the derivation ensure that only the correct parties can produce a matching token and a valid proof over it.
+
+5. If all checks pass: open bidirectional pipe, immediately discard all channel state (token, both proofs, both pubkeys)
+6. If any check fails: drop BOTH connections, discard all channel state
+
+**Privacy note:** The relay holds bare public keys (with no GitHub username attached) for at most `admission_window` (default 5 minutes) during the channel admission phase. This is a narrower exposure window than authentication, and the pubkeys carry no identity information without the username mapping that was discarded in §6.6. All pubkey material is discarded the moment the pipe opens or the admission times out.
 
 ### 7.5 Properties
 
@@ -254,13 +279,12 @@ This is a deliberate trade-off: the relay gains zero knowledge about identities 
 | Anonymous | Token reveals nothing about the parties to the relay |
 | Unlinkable | Different windows produce uncorrelated tokens |
 | Exclusive | Requires knowledge of both exact pubkeys to derive |
-| Directional | Sender and receiver compute complementary tokens (s2r/r2s) |
 
 ### 7.6 Token rotation and clock skew
 
 Channel tokens rotate every hour (`window` increments). Both parties MUST use the current window when computing tokens. The CLI SHOULD warn if the clock skew between client and relay exceeds 30 seconds.
 
-If a session spans a window boundary (e.g., initiated at 23:59 and received at 00:01), the client SHOULD retry with the adjacent window's token if the relay returns `{"type":"error","code":"channel_expired"}`.
+If a channel join times out or the relay returns `{"type":"error","code":"channel_expired"}`, the client SHOULD retry with `window - 1` and then `window + 1` to account for clock skew near the hour boundary. At most one retry in each direction.
 
 ---
 
@@ -268,21 +292,20 @@ If a session spans a window boundary (e.g., initiated at 23:59 and received at 0
 
 ### 8.1 First party arrival
 
-When a client presents a channel token:
+When a client presents a channel join (see §7.4), and no pending entry exists for this `channel_token`:
 
-1. The relay checks for an existing pending channel entry for this token
-2. If none exists, the relay creates: `{ channel_token -> { proof, ephemeral_id, arrived_at } }`
-3. The `arrived_at` timestamp is set to `now`. The pending channel entry MUST be deleted if no second party arrives within `admission_window` (default 60 seconds)
-4. The relay sends `{"type":"waiting","expires_in_seconds":60}` to the first party
+1. The relay verifies the proof as described in §7.4 (first arrival)
+2. The relay creates: `{ channel_token -> { proof, pubkey_1, socket, arrived_at } }`
+3. The `arrived_at` timestamp is set to `now`. The pending channel entry MUST be deleted if no second party arrives within `admission_window` (default 5 minutes)
+4. The relay sends `{"type":"waiting","expires_in_seconds":300}` to the first party
 
 ### 8.2 Second party arrival
 
-When a second client presents the complementary channel token:
+When a second client presents the same `channel_token`:
 
-1. The relay looks up the pending entry for this token
-2. The relay verifies the complementary relationship between the two tokens
-3. If valid: the relay opens a bidirectional pipe between the two sockets and MUST immediately delete the pending channel state
-4. If invalid: the relay closes BOTH connections with `{"type":"error","code":"auth_failed"}` and MUST delete the pending channel state
+1. The relay verifies the proof and performs the complementary proof check as described in §7.4 (second arrival)
+2. If all checks pass: the relay opens a bidirectional pipe between the two sockets and MUST immediately discard all channel state — channel token, both proofs, both pubkeys
+3. If any check fails: the relay closes BOTH connections with `{"type":"error","code":"auth_failed"}` and MUST discard all channel state
 
 Closing both connections on failure is deliberate: if one proof is invalid, the first party may also be compromised or confused.
 
@@ -292,7 +315,7 @@ The relay MUST NOT retain any state linking the two ephemeral IDs to each other 
 
 Once a pipe is established:
 
-1. The relay streams raw bytes between the two sockets with no inspection, buffering, or transformation
+1. The sender transmits the wire payload (§9.2) as a single WebSocket binary message. The relay forwards it as-is to the recipient. The recipient processes the first binary message received after `connected` as the complete wire payload
 2. The relay MUST NOT log message events, byte counts, or timing information
 3. When either socket closes, the relay closes the other socket
 4. The relay MUST immediately delete the pipe state
@@ -304,20 +327,21 @@ Once a pipe is established:
 At any given moment the relay holds **only** the following in memory:
 
 ```
-active_sessions: {
-  ephemeral_id (random 32 bytes) -> {
-    socket:     WebSocket connection,
-    expires_at: timestamp
+authenticated_connections: {
+  socket -> {
+    authenticated: true,
+    expires_at:    timestamp
   }
 }
 
 pending_channels: {
   channel_token (32 bytes) -> {
     proof:        channel_proof bytes,
-    ephemeral_id: ephemeral session ID,
+    pubkey_1:     first party's public key (no username attached),
+    socket:       first party's WebSocket connection,
     arrived_at:   timestamp
   }
-  // Max lifetime: admission_window (60 seconds)
+  // Max lifetime: admission_window (default 5 minutes)
   // Deleted immediately when pipe opens or times out
 }
 
@@ -355,25 +379,41 @@ The payload is a JSON object containing one or more secrets:
 
 ### 9.2 Encryption
 
+Both parties MUST have an Ed25519 SSH key on GitHub (see §4).
+
 A fresh ephemeral X25519 keypair is generated for every send operation. This provides forward secrecy — compromise of the recipient's long-term private key does not compromise past sessions.
 
 ```
-shared_secret  = X25519(sender_ephemeral_private, recipient_public)
-encryption_key = HKDF-SHA256(shared_secret, salt=nil, info="shenan-payload-v1", length=32)
-ciphertext     = ChaCha20-Poly1305-Encrypt(encryption_key, nonce, plaintext_json)
-wire_payload   = sender_ephemeral_pubkey || nonce || ciphertext
+shared_secret     = X25519(sender_ephemeral_private, recipient_ed25519_public)
+encryption_key    = HKDF-SHA256(shared_secret, salt=nil, info="shenan-payload-v1", length=32)
+nonce             = random(12 bytes)                                // ChaCha20-Poly1305 uses 96-bit nonce
+ciphertext        = ChaCha20-Poly1305-Encrypt(encryption_key, nonce, plaintext_json)
+wire_payload      = sender_ephemeral_x25519_pubkey || nonce || ciphertext
 ```
+
+Wire payload layout:
+
+| Offset | Length | Content |
+|--------|--------|---------|
+| 0 | 32 bytes | Sender's ephemeral X25519 public key |
+| 32 | 12 bytes | Nonce (random) |
+| 44 | variable | ChaCha20-Poly1305 ciphertext (includes 16-byte auth tag) |
 
 ### 9.3 Decryption
 
 The recipient decrypts by:
 
 ```
-sender_ephemeral_pubkey, nonce, ciphertext = parse(wire_payload)
-shared_secret  = X25519(recipient_private, sender_ephemeral_pubkey)
-encryption_key = HKDF-SHA256(shared_secret, salt=nil, info="shenan-payload-v1", length=32)
-plaintext_json = ChaCha20-Poly1305-Decrypt(encryption_key, nonce, ciphertext)
+sender_ephemeral_pubkey = wire_payload[0:32]
+nonce                   = wire_payload[32:44]
+ciphertext              = wire_payload[44:]
+
+shared_secret            = X25519(recipient_ed25519_private, sender_ephemeral_pubkey)
+encryption_key           = HKDF-SHA256(shared_secret, salt=nil, info="shenan-payload-v1", length=32)
+plaintext_json           = ChaCha20-Poly1305-Decrypt(encryption_key, nonce, ciphertext)
 ```
+
+If decryption fails (auth tag mismatch), the payload MUST be silently dropped. No error detail is sent back through the relay.
 
 The wire payload is transmitted as binary WebSocket data through the relay pipe.
 
@@ -400,7 +440,8 @@ All control messages between client and relay are JSON objects, one per WebSocke
 {
   "type": "channel",
   "token": "<hex-encoded-32-bytes>",
-  "proof": "<base64-encoded-signature>"
+  "proof": "<base64-encoded-signature>",
+  "pubkey": "<base64-encoded-ssh-public-key>"
 }
 ```
 
@@ -417,12 +458,12 @@ All control messages between client and relay are JSON objects, one per WebSocke
 
 `authenticated`: confirms successful auth
 ```json
-{"type":"authenticated","ephemeral_id":"<hex>"}
+{"type":"authenticated"}
 ```
 
 `waiting`: first party acknowledged, waiting for second
 ```json
-{"type":"waiting","expires_in_seconds":60}
+{"type":"waiting","expires_in_seconds":300}
 ```
 
 `connected`: pipe established, switch to binary frames
@@ -451,7 +492,7 @@ All control messages between client and relay are JSON objects, one per WebSocke
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `admission_window` | 60s | Time to wait for second party after first arrives |
+| `admission_window` | 5m | Time to wait for second party after first arrives |
 | `session_expiry` | 10m | Idle authenticated session lifetime |
 | `max_payload_size` | 1048576 (1MB) | Maximum bytes per pipe transfer |
 | `rate_limit_auth` | 10/min/IP | Auth attempt rate limit |
@@ -519,13 +560,49 @@ shenan config get relay
 shenan relay start --port 443 --tls-cert cert.pem --tls-key key.pem
 ```
 
+### 12.4 Input parsing
+
+**Command-line arguments:** `KEY=value` pairs are parsed directly into the payload `secrets` map.
+
+**File input** (`--from-file` or stdin): The CLI parses `.env`-style files with the following rules:
+- One `KEY=value` per line
+- Lines starting with `#` are comments (ignored)
+- Empty lines are ignored
+- Values MAY be quoted with single or double quotes; quotes are stripped
+- No variable interpolation or shell expansion
+- Keys must match `[A-Za-z_][A-Za-z0-9_]*`
+
+Example `.env` file:
+```
+# Database
+DATABASE_URL=postgres://user:pass@host:5432/db
+API_KEY="sk-abc123"
+REDIS_URL='redis://localhost:6379'
+```
+
+Parses into the payload JSON (§9.1):
+```json
+{
+  "version": 1,
+  "secrets": {
+    "DATABASE_URL": "postgres://user:pass@host:5432/db",
+    "API_KEY": "sk-abc123",
+    "REDIS_URL": "redis://localhost:6379"
+  },
+  "sender_pubkey_fingerprint": "SHA256:...",
+  "timestamp": 1234567890
+}
+```
+
+**Output** (`--out`): The CLI writes secrets in `.env` format (unquoted values, one per line). With `--merge`, new keys are appended and existing keys are updated in place.
+
 ---
 
 ## 13. Security Analysis
 
-### 13.1 What a fully compromised relay reveals
+### 13.1 What a conforming relay reveals
 
-Even with complete real-time memory access:
+The POC assumes a trusted, conforming relay. Against such a relay, even with complete real-time memory access:
 
 **Can see:**
 - Some number of verified GitHub users are currently connected (as anonymous ephemeral IDs)
@@ -554,13 +631,24 @@ HKDF-SHA256 output is 256 bits. The probability of two different party pairs der
 | Attack | Prevention |
 |---|---|
 | Unauthenticated flood | GitHub auth gate — must prove GitHub identity |
-| Slot occupancy | Complementary proof check on channel admission |
+| Channel squatting | DH shared secret in token derivation — third parties cannot compute the token |
 | Ciphertext harvest | Structurally impossible — nothing stored |
 | Replay | Channel tokens rotate hourly |
 | DoS via queue exhaustion | No queue exists |
 | GitHub API exhaustion | Rate limiting on auth phase |
 
-### 13.5 Post-quantum roadmap
+### 13.5 GitHub key fetch as side channel
+
+During authentication, the relay fetches `https://github.com/<username>.keys`. This creates an observable correlation at GitHub's end: GitHub (or an adversary monitoring GitHub's CDN) can see that a specific relay IP requested a specific user's keys at a specific time. If the adversary also monitors relay connections, they can correlate the key fetch timing with the connecting client's IP to de-anonymize the session.
+
+Mitigations:
+- The relay MAY cache GitHub key responses for a short TTL (e.g., 5 minutes) to decorrelate fetch timing from individual connections
+- Self-hosted relays reduce exposure to a single organization's traffic
+- A future version could support client-provided public keys with out-of-band verification, eliminating the GitHub fetch entirely
+
+This side channel does not affect the relay's post-authentication anonymity guarantees — it is limited to the authentication phase.
+
+### 13.6 Post-quantum roadmap
 
 The current design uses X25519 for key agreement, which is vulnerable to a sufficiently powerful quantum computer via Shor's algorithm. The roadmap includes a hybrid key agreement combining X25519 with ML-KEM-768 (CRYSTALS-Kyber, NIST PQC standard), matching the approach taken by Signal's PQXDH protocol. This upgrade is backward-compatible and planned for a future version.
 
@@ -570,7 +658,7 @@ The current design uses X25519 for key agreement, which is vulnerable to a suffi
 
 ### 14.1 Memory zeroing
 
-Implementations SHOULD zero sensitive bytes (private key material, nonces, channel tokens) immediately after use. In Go, use `crypto/subtle` utilities. In Rust, use `zeroize`.
+Implementations SHOULD zero sensitive bytes (private key material, nonces, channel tokens) immediately after use. In Rust, use the `zeroize` crate with `Zeroizing<T>` wrappers.
 
 ### 14.2 No-log enforcement
 
@@ -590,23 +678,33 @@ The relay MUST clean up:
 - Expired authenticated sessions (after `session_expiry`)
 - Stale pipes (on socket close or error)
 
-Cleanup SHOULD run in a background goroutine, not inline with request handling.
+Cleanup SHOULD run in a background task (e.g., `tokio::spawn`), not inline with request handling.
 
 ---
 
-## 15. Open Questions
+## 15. POC Decisions and Future Work
 
-These are design questions not yet resolved in the specification.
+### Resolved for POC
 
-1. **Multi-recipient sends** — When sending to multiple recipients simultaneously, should each recipient get an independent channel, or should there be a group channel primitive?
+1. **Multi-recipient sends** — Each recipient gets an independent channel. The CLI runs parallel send operations internally. This matches Signal's model (each message is independently encrypted per recipient, even in group contexts). A group channel primitive is unnecessary complexity for the POC.
 
-2. **Relay federation** — Should multiple relays be able to interoperate, or is each relay fully independent? Independent relays are simpler but require both parties to agree on a relay in advance.
+2. **Relay federation** — No federation. Each relay is fully independent. The default public relay at `wss://relay.shenan.dev` handles the common case. Users may specify an alternative with `--relay` or `shenan config set relay`. Both parties must agree on a relay out of band.
 
-3. **Key rotation** — When a user rotates their GitHub SSH keys, channel tokens derived from old keys become invalid. What is the graceful handling for this?
+3. **Key rotation** — The client always fetches fresh keys from GitHub at send/receive time (no client-side key cache). The relay uses a short-TTL FIFO cache for GitHub key responses to reduce API load and mitigate the key-fetch side channel (§13.5). If a user rotates their key, new sessions use the new key automatically. In-flight sessions are unaffected (they already have the pipe open).
 
-4. **Offline notification** — The current design requires both parties to be online simultaneously. Is there a way to notify a recipient that someone wants to send them a secret, without storing the payload?
+4. **Relay discovery** — Default relay is `wss://relay.shenan.dev`. Self-hosters configure via `shenan config set relay` or per-command `--relay` flag. No DNS-based discovery for the POC.
 
-5. **Relay discovery** — How do two parties agree on which relay to use without out-of-band coordination? A default public relay at `relay.shenan.dev` handles the common case, but self-hosters need a discovery mechanism.
+### Known Limitations (future work)
+
+5. **Zero-trust relay** — The POC assumes a trusted relay. A future iteration will add:
+   - **Payload signing** — The sender signs the ciphertext with their Ed25519 identity key. The recipient verifies before trusting the content. This prevents a malicious relay from substituting payloads.
+   - **Relay-blind identity** — Techniques to prevent a malicious relay from correlating auth-phase identity data with admission-phase pubkeys to reconstruct the relationship graph.
+
+6. **Simultaneous online requirement** — Both parties must be online within the `admission_window` (default 5 minutes). This requires out-of-band coordination ("hey, run `shenan receive` now"). A future version may add a lightweight notification mechanism.
+
+7. **Additional key types** — Only Ed25519 is supported. RSA and ECDSA support may be added in a future version.
+
+8. **Post-quantum key exchange** — Hybrid X25519 + ML-KEM-768 for payload encryption (see §13.6).
 
 ---
 
