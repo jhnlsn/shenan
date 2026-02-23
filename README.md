@@ -194,14 +194,30 @@ shenan trust remove github:mallory
 docker run -p 443:443 ghcr.io/jhnlsn/shenan-relay
 
 # Binary
-shenan relay start --port 443 --tls-cert cert.pem --tls-key key.pem
+shenan-relay --bind 0.0.0.0:443 --tls-cert cert.pem --tls-key key.pem
 
 # Point your CLI at it
 shenan config set relay wss://your-relay.example.com
 
 # Or per-command
 shenan send --relay wss://relay.yourcompany.com --to github:bob SECRET=value
+
+# Or via environment variable
+SHENAN_RELAY=wss://relay.yourcompany.com shenan send --to github:bob SECRET=value
 ```
+
+All relay options can be configured via environment variables:
+
+| Flag | Env var |
+|---|---|
+| `--bind` | `SHENAN_BIND` |
+| `--tls-cert` | `SHENAN_TLS_CERT` |
+| `--tls-key` | `SHENAN_TLS_KEY` |
+| `--log-level` | `SHENAN_LOG` |
+| `--admission-window` | `SHENAN_ADMISSION_WINDOW` |
+| `--session-expiry` | `SHENAN_SESSION_EXPIRY` |
+| `--max-payload-size` | `SHENAN_MAX_PAYLOAD_SIZE` |
+| `--rate-limit-auth` | `SHENAN_RATE_LIMIT_AUTH` |
 
 The relay has no configuration file, no database, no persistent state. It is safe to restart at any time — there was nothing to keep. Multiple independent relays can coexist; clients choose which relay to use.
 
@@ -230,7 +246,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Status
 
-Pre-alpha — specification phase. The protocol is designed. Implementation is beginning. See [SPEC.md](SPEC.md) for the full technical specification.
+Pre-alpha — implementation complete. The protocol, relay, and CLI are built. See [SPEC.md](SPEC.md) for the full technical specification.
 
 ---
 

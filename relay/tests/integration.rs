@@ -31,6 +31,7 @@ fn test_config() -> RelayConfig {
         session_expiry: Duration::from_secs(60),
         max_payload_size: 1024 * 1024,
         rate_limit_auth: 1000,
+        log_level: "warn".to_string(),
     }
 }
 
@@ -42,8 +43,8 @@ fn test_cache(users: &[(&str, &SigningKey)]) -> Arc<GitHubKeyCache> {
         let wire_bytes = ssh::ed25519_to_ssh_wire(&vk.to_bytes());
         let b64 = base64::engine::general_purpose::STANDARD.encode(&wire_bytes);
         let line = format!("ssh-ed25519 {b64} {username}@test");
-        let key = ssh::parse_single_ed25519(&line).unwrap();
-        cache.insert(username, key);
+        let keys = ssh::parse_ed25519_keys_required(&line).unwrap();
+        cache.insert(username, keys);
     }
     Arc::new(cache)
 }
@@ -67,8 +68,14 @@ async fn connect_and_auth(
 
     // Receive challenge
     let challenge_text = read_text(&mut stream).await;
-    let (nonce_hex, _fingerprint) = match wire::Message::from_json(&challenge_text).unwrap() {
-        wire::Message::Challenge { nonce, pubkey_fingerprint } => (nonce, pubkey_fingerprint),
+    let nonce_hex = match wire::Message::from_json(&challenge_text).unwrap() {
+        wire::Message::Challenge { nonce, pubkey_fingerprints } => {
+            assert!(
+                !pubkey_fingerprints.is_empty(),
+                "challenge should include at least one pubkey fingerprint"
+            );
+            nonce
+        }
         other => panic!("expected challenge, got: {other:?}"),
     };
 
@@ -458,4 +465,455 @@ async fn payload_too_large_rejected() {
         }
         other => panic!("expected payload_too_large, got: {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn malformed_json_rejected() {
+    let alice_key = SigningKey::generate(&mut OsRng);
+    let cache = test_cache(&[("alice", &alice_key)]);
+    let (addr, _handle) = shenan_relay::server::run_test(test_config(), cache)
+        .await
+        .unwrap();
+    let url = format!("ws://{addr}");
+
+    let (ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+    let (mut sink, mut stream) = ws.split();
+
+    sink.send(Message::Text("{not-json".into())).await.unwrap();
+
+    let resp = read_text(&mut stream).await;
+    match wire::Message::from_json(&resp).unwrap() {
+        wire::Message::Error { code, message } => {
+            assert_eq!(code, wire::error_codes::INTERNAL_ERROR);
+            assert_eq!(message.as_deref(), Some("invalid message format"));
+        }
+        other => panic!("expected internal_error, got: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn channel_before_auth_rejected() {
+    let alice_key = SigningKey::generate(&mut OsRng);
+    let cache = test_cache(&[("alice", &alice_key)]);
+    let (addr, _handle) = shenan_relay::server::run_test(test_config(), cache)
+        .await
+        .unwrap();
+    let url = format!("ws://{addr}");
+
+    let (ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+    let (mut sink, mut stream) = ws.split();
+
+    let msg = wire::Message::Channel {
+        token: "00".repeat(32),
+        proof: "ZmFrZQ==".into(),
+        pubkey: "ZmFrZQ==".into(),
+    };
+    sink.send(Message::Text(msg.to_json().unwrap())).await.unwrap();
+
+    let resp = read_text(&mut stream).await;
+    match wire::Message::from_json(&resp).unwrap() {
+        wire::Message::Error { code, message } => {
+            assert_eq!(code, wire::error_codes::AUTH_FAILED);
+            assert_eq!(message.as_deref(), Some("unexpected message"));
+        }
+        other => panic!("expected auth_failed, got: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn auth_before_hello_rejected() {
+    let alice_key = SigningKey::generate(&mut OsRng);
+    let cache = test_cache(&[("alice", &alice_key)]);
+    let (addr, _handle) = shenan_relay::server::run_test(test_config(), cache)
+        .await
+        .unwrap();
+    let url = format!("ws://{addr}");
+
+    let (ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+    let (mut sink, mut stream) = ws.split();
+
+    let msg = wire::Message::Auth {
+        signature: base64::engine::general_purpose::STANDARD.encode([0u8; 64]),
+    };
+    sink.send(Message::Text(msg.to_json().unwrap())).await.unwrap();
+
+    let resp = read_text(&mut stream).await;
+    match wire::Message::from_json(&resp).unwrap() {
+        wire::Message::Error { code, message } => {
+            assert_eq!(code, wire::error_codes::AUTH_FAILED);
+            assert_eq!(message.as_deref(), Some("unexpected message"));
+        }
+        other => panic!("expected auth_failed, got: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn invalid_auth_signature_base64_rejected() {
+    let alice_key = SigningKey::generate(&mut OsRng);
+    let cache = test_cache(&[("alice", &alice_key)]);
+    let (addr, _handle) = shenan_relay::server::run_test(test_config(), cache)
+        .await
+        .unwrap();
+    let url = format!("ws://{addr}");
+
+    let (ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+    let (mut sink, mut stream) = ws.split();
+
+    let hello = wire::Message::Hello {
+        version: wire::PROTOCOL_VERSION,
+        user: "alice".to_string(),
+    };
+    sink.send(Message::Text(hello.to_json().unwrap())).await.unwrap();
+    let _ = read_text(&mut stream).await; // challenge
+
+    let msg = wire::Message::Auth {
+        signature: "%%%not-base64%%%".to_string(),
+    };
+    sink.send(Message::Text(msg.to_json().unwrap())).await.unwrap();
+
+    let resp = read_text(&mut stream).await;
+    match wire::Message::from_json(&resp).unwrap() {
+        wire::Message::Error { code, .. } => assert_eq!(code, wire::error_codes::AUTH_FAILED),
+        other => panic!("expected auth_failed, got: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn invalid_channel_fields_rejected() {
+    let alice_key = SigningKey::generate(&mut OsRng);
+    let bob_key = SigningKey::generate(&mut OsRng);
+    let alice_pub = alice_key.verifying_key();
+    let bob_pub = bob_key.verifying_key();
+
+    let cache = test_cache(&[("alice", &alice_key), ("bob", &bob_key)]);
+    let (addr, _handle) = shenan_relay::server::run_test(test_config(), cache)
+        .await
+        .unwrap();
+    let url = format!("ws://{addr}");
+
+    let window = channel::current_window();
+    let token = channel::derive_token(&alice_key, &alice_pub, &bob_pub, window);
+    let proof = channel::sign_token(&alice_key, &token);
+
+    // Invalid token
+    let (mut sink, mut stream) = connect_and_auth(&url, &alice_key, "alice").await;
+    let bad_token_msg = wire::Message::Channel {
+        token: "deadbeef".to_string(),
+        proof: base64::engine::general_purpose::STANDARD.encode(proof.to_bytes()),
+        pubkey: base64::engine::general_purpose::STANDARD
+            .encode(ssh::ed25519_to_ssh_wire(&alice_pub.to_bytes())),
+    };
+    sink.send(Message::Text(bad_token_msg.to_json().unwrap())).await.unwrap();
+    let resp = read_text(&mut stream).await;
+    match wire::Message::from_json(&resp).unwrap() {
+        wire::Message::Error { code, message } => {
+            assert_eq!(code, wire::error_codes::AUTH_FAILED);
+            assert_eq!(message.as_deref(), Some("invalid token"));
+        }
+        other => panic!("expected invalid token error, got: {other:?}"),
+    }
+
+    // Invalid proof
+    let (mut sink, mut stream) = connect_and_auth(&url, &alice_key, "alice").await;
+    let bad_proof_msg = wire::Message::Channel {
+        token: hex::encode(*token),
+        proof: "***bad***".to_string(),
+        pubkey: base64::engine::general_purpose::STANDARD
+            .encode(ssh::ed25519_to_ssh_wire(&alice_pub.to_bytes())),
+    };
+    sink.send(Message::Text(bad_proof_msg.to_json().unwrap())).await.unwrap();
+    let resp = read_text(&mut stream).await;
+    match wire::Message::from_json(&resp).unwrap() {
+        wire::Message::Error { code, message } => {
+            assert_eq!(code, wire::error_codes::AUTH_FAILED);
+            assert_eq!(message.as_deref(), Some("invalid proof"));
+        }
+        other => panic!("expected invalid proof error, got: {other:?}"),
+    }
+
+    // Invalid pubkey
+    let (mut sink, mut stream) = connect_and_auth(&url, &alice_key, "alice").await;
+    let bad_pubkey_msg = wire::Message::Channel {
+        token: hex::encode(*token),
+        proof: base64::engine::general_purpose::STANDARD.encode(proof.to_bytes()),
+        pubkey: "%%%bad%%%".to_string(),
+    };
+    sink.send(Message::Text(bad_pubkey_msg.to_json().unwrap())).await.unwrap();
+    let resp = read_text(&mut stream).await;
+    match wire::Message::from_json(&resp).unwrap() {
+        wire::Message::Error { code, message } => {
+            assert_eq!(code, wire::error_codes::AUTH_FAILED);
+            assert_eq!(message.as_deref(), Some("invalid pubkey"));
+        }
+        other => panic!("expected invalid pubkey error, got: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn raw_32_byte_pubkey_channel_join_works() {
+    let alice_key = SigningKey::generate(&mut OsRng);
+    let bob_key = SigningKey::generate(&mut OsRng);
+    let alice_pub = alice_key.verifying_key();
+    let bob_pub = bob_key.verifying_key();
+
+    let cache = test_cache(&[("alice", &alice_key), ("bob", &bob_key)]);
+    let (addr, _handle) = shenan_relay::server::run_test(test_config(), cache)
+        .await
+        .unwrap();
+    let url = format!("ws://{addr}");
+
+    let window = channel::current_window();
+
+    let (mut alice_sink, mut alice_stream) = connect_and_auth(&url, &alice_key, "alice").await;
+    let (mut bob_sink, mut bob_stream) = connect_and_auth(&url, &bob_key, "bob").await;
+
+    let alice_token = channel::derive_token(&alice_key, &alice_pub, &bob_pub, window);
+    let alice_proof = channel::sign_token(&alice_key, &alice_token);
+    let alice_join = wire::Message::Channel {
+        token: hex::encode(*alice_token),
+        proof: base64::engine::general_purpose::STANDARD.encode(alice_proof.to_bytes()),
+        pubkey: base64::engine::general_purpose::STANDARD.encode(alice_pub.to_bytes()),
+    };
+    alice_sink
+        .send(Message::Text(alice_join.to_json().unwrap()))
+        .await
+        .unwrap();
+    let alice_resp = read_text(&mut alice_stream).await;
+    assert!(matches!(
+        wire::Message::from_json(&alice_resp).unwrap(),
+        wire::Message::Waiting { .. }
+    ));
+
+    let bob_token = channel::derive_token(&bob_key, &alice_pub, &bob_pub, window);
+    let bob_proof = channel::sign_token(&bob_key, &bob_token);
+    let bob_join = wire::Message::Channel {
+        token: hex::encode(*bob_token),
+        proof: base64::engine::general_purpose::STANDARD.encode(bob_proof.to_bytes()),
+        pubkey: base64::engine::general_purpose::STANDARD.encode(bob_pub.to_bytes()),
+    };
+    bob_sink
+        .send(Message::Text(bob_join.to_json().unwrap()))
+        .await
+        .unwrap();
+
+    let bob_resp = read_text(&mut bob_stream).await;
+    let alice_connected = read_text(&mut alice_stream).await;
+    assert!(matches!(
+        wire::Message::from_json(&bob_resp).unwrap(),
+        wire::Message::Connected
+    ));
+    assert!(matches!(
+        wire::Message::from_json(&alice_connected).unwrap(),
+        wire::Message::Connected
+    ));
+}
+
+#[tokio::test]
+async fn rate_limit_enforced_per_ip() {
+    let alice_key = SigningKey::generate(&mut OsRng);
+    let cache = test_cache(&[("alice", &alice_key)]);
+    let mut config = test_config();
+    config.rate_limit_auth = 1;
+    let (addr, _handle) = shenan_relay::server::run_test(config, cache)
+        .await
+        .unwrap();
+    let url = format!("ws://{addr}");
+
+    let (ws1, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+    let (mut sink1, mut stream1) = ws1.split();
+    let hello = wire::Message::Hello {
+        version: wire::PROTOCOL_VERSION,
+        user: "alice".to_string(),
+    };
+    sink1.send(Message::Text(hello.to_json().unwrap())).await.unwrap();
+    let first = read_text(&mut stream1).await;
+    assert!(matches!(
+        wire::Message::from_json(&first).unwrap(),
+        wire::Message::Challenge { .. }
+    ));
+
+    let (ws2, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+    let (mut sink2, mut stream2) = ws2.split();
+    sink2.send(Message::Text(hello.to_json().unwrap())).await.unwrap();
+    let second = read_text(&mut stream2).await;
+    match wire::Message::from_json(&second).unwrap() {
+        wire::Message::Error { code, .. } => assert_eq!(code, wire::error_codes::RATE_LIMITED),
+        other => panic!("expected rate_limited, got: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn session_expiry_blocks_channel_join() {
+    let alice_key = SigningKey::generate(&mut OsRng);
+    let bob_key = SigningKey::generate(&mut OsRng);
+    let alice_pub = alice_key.verifying_key();
+    let bob_pub = bob_key.verifying_key();
+
+    let cache = test_cache(&[("alice", &alice_key), ("bob", &bob_key)]);
+    let mut config = test_config();
+    config.session_expiry = Duration::from_millis(10);
+    let (addr, _handle) = shenan_relay::server::run_test(config, cache)
+        .await
+        .unwrap();
+    let url = format!("ws://{addr}");
+
+    let (mut sink, mut stream) = connect_and_auth(&url, &alice_key, "alice").await;
+    tokio::time::sleep(Duration::from_millis(30)).await;
+
+    let window = channel::current_window();
+    let token = channel::derive_token(&alice_key, &alice_pub, &bob_pub, window);
+    let proof = channel::sign_token(&alice_key, &token);
+    let msg = wire::Message::Channel {
+        token: hex::encode(*token),
+        proof: base64::engine::general_purpose::STANDARD.encode(proof.to_bytes()),
+        pubkey: base64::engine::general_purpose::STANDARD
+            .encode(ssh::ed25519_to_ssh_wire(&alice_pub.to_bytes())),
+    };
+    sink.send(Message::Text(msg.to_json().unwrap())).await.unwrap();
+
+    let resp = read_text(&mut stream).await;
+    match wire::Message::from_json(&resp).unwrap() {
+        wire::Message::Error { code, message } => {
+            assert_eq!(code, wire::error_codes::AUTH_FAILED);
+            assert_eq!(message.as_deref(), Some("session expired"));
+        }
+        other => panic!("expected session expired error, got: {other:?}"),
+    }
+}
+
+/// Create a cache where a user has multiple keys registered.
+fn test_cache_multi(users: &[(&str, &[&SigningKey])]) -> Arc<GitHubKeyCache> {
+    let cache = GitHubKeyCache::new(Duration::from_secs(3600));
+    for (username, signing_keys) in users {
+        let mut keys = Vec::new();
+        for sk in *signing_keys {
+            let vk = sk.verifying_key();
+            let wire_bytes = ssh::ed25519_to_ssh_wire(&vk.to_bytes());
+            let b64 = base64::engine::general_purpose::STANDARD.encode(&wire_bytes);
+            let line = format!("ssh-ed25519 {b64} {username}@test");
+            let parsed = ssh::parse_ed25519_keys_required(&line).unwrap();
+            keys.extend(parsed);
+        }
+        cache.insert(username, keys);
+    }
+    Arc::new(cache)
+}
+
+#[tokio::test]
+async fn multi_key_auth_succeeds_with_any_key() {
+    // Bob has two keys; he authenticates with the second one
+    let alice_key = SigningKey::generate(&mut OsRng);
+    let bob_key_1 = SigningKey::generate(&mut OsRng);
+    let bob_key_2 = SigningKey::generate(&mut OsRng);
+
+    let cache = test_cache_multi(&[
+        ("alice", &[&alice_key]),
+        ("bob", &[&bob_key_1, &bob_key_2]),
+    ]);
+    let (addr, _handle) = shenan_relay::server::run_test(test_config(), cache)
+        .await
+        .unwrap();
+    let url = format!("ws://{addr}");
+
+    // Bob authenticates with key_2 — relay should accept since key_2 is in his list
+    let (_bob_sink, _bob_stream) = connect_and_auth(&url, &bob_key_2, "bob").await;
+    // If we get here without panic, auth succeeded
+}
+
+#[tokio::test]
+async fn multi_key_send_receive_cycle() {
+    // Alice (1 key) sends to Bob (2 keys). Bob uses key_2 for the session.
+    let alice_key = SigningKey::generate(&mut OsRng);
+    let bob_key_1 = SigningKey::generate(&mut OsRng);
+    let bob_key_2 = SigningKey::generate(&mut OsRng);
+
+    let alice_pub = alice_key.verifying_key();
+    let bob_pub_2 = bob_key_2.verifying_key();
+
+    let cache = test_cache_multi(&[
+        ("alice", &[&alice_key]),
+        ("bob", &[&bob_key_1, &bob_key_2]),
+    ]);
+    let (addr, _handle) = shenan_relay::server::run_test(test_config(), cache)
+        .await
+        .unwrap();
+    let url = format!("ws://{addr}");
+
+    // Build encrypted payload for bob's key_2
+    let mut secrets = BTreeMap::new();
+    secrets.insert("TOKEN".to_string(), "multi-key-test".to_string());
+
+    let sender_fingerprint = {
+        let wire = ssh::ed25519_to_ssh_wire(&alice_pub.to_bytes());
+        let hash = Sha256::digest(&wire);
+        let b64 = base64::engine::general_purpose::STANDARD.encode(hash);
+        format!("SHA256:{}", b64.trim_end_matches('='))
+    };
+
+    let payload_obj = payload::Payload::new(secrets.clone(), sender_fingerprint);
+    let encrypted = payload::encrypt(&payload_obj, &bob_pub_2).unwrap();
+
+    let window = channel::current_window();
+
+    // Connect both parties (bob uses key_2)
+    let (mut alice_sink, mut alice_stream) =
+        connect_and_auth(&url, &alice_key, "alice").await;
+    let (mut bob_sink, mut bob_stream) =
+        connect_and_auth(&url, &bob_key_2, "bob").await;
+
+    // Alice joins channel (sender→recipient using bob's key_2)
+    let alice_resp = send_channel_join(
+        &mut alice_sink,
+        &mut alice_stream,
+        &alice_key,
+        &alice_pub,
+        &bob_pub_2,
+        window,
+    )
+    .await;
+    assert!(matches!(alice_resp, wire::Message::Waiting { .. }));
+
+    // Bob joins with key_2
+    let bob_resp = send_channel_join(
+        &mut bob_sink,
+        &mut bob_stream,
+        &bob_key_2,
+        &alice_pub,
+        &bob_pub_2,
+        window,
+    )
+    .await;
+    assert!(matches!(bob_resp, wire::Message::Connected));
+
+    // Alice gets connected
+    let alice_connected = read_text(&mut alice_stream).await;
+    assert!(matches!(
+        wire::Message::from_json(&alice_connected).unwrap(),
+        wire::Message::Connected
+    ));
+
+    // Alice sends encrypted payload
+    alice_sink
+        .send(Message::Binary(encrypted.clone()))
+        .await
+        .unwrap();
+
+    // Bob receives and decrypts
+    let received_data = read_binary(&mut bob_stream).await;
+    assert_eq!(received_data, encrypted);
+
+    let decrypted = payload::decrypt(&received_data, &bob_key_2).unwrap();
+    assert_eq!(decrypted.secrets, secrets);
+
+    // Bob ACKs
+    bob_sink
+        .send(Message::Text(wire::Message::Received.to_json().unwrap()))
+        .await
+        .unwrap();
+
+    let alice_ack = read_text(&mut alice_stream).await;
+    assert!(matches!(
+        wire::Message::from_json(&alice_ack).unwrap(),
+        wire::Message::Received
+    ));
 }

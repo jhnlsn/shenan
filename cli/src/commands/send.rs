@@ -7,9 +7,10 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 
 use crate::dotenv;
+use crate::fanout;
 use crate::github;
 use crate::identity;
-use crate::session::{self, Role};
+use crate::session::Role;
 use crate::storage;
 
 pub async fn run(
@@ -17,6 +18,7 @@ pub async fn run(
     key_values: Vec<String>,
     from_file: Option<PathBuf>,
     stdin: bool,
+    relay_override: Option<String>,
 ) -> Result<()> {
     let to_username = to
         .strip_prefix("github:")
@@ -53,12 +55,24 @@ pub async fn run(
 
     eprintln!("Sending {} secret(s) to {}...", secrets.len(), to_username);
 
-    // Fetch recipient's public key from GitHub
-    let recipient_key = github::fetch_ed25519_pubkey(to_username).await?;
-    let recipient_verifying = recipient_key.to_verifying_key()
-        .map_err(|e| anyhow::anyhow!("invalid recipient key: {e}"))?;
+    // Fetch recipient's public keys from GitHub (may be multiple)
+    let recipient_keys = github::fetch_ed25519_pubkeys(to_username).await?;
+    let mut recipient_verifying_keys = Vec::with_capacity(recipient_keys.len());
+    for key in &recipient_keys {
+        recipient_verifying_keys.push(
+            key.to_verifying_key()
+                .map_err(|e| anyhow::anyhow!("invalid recipient key: {e}"))?,
+        );
+    }
 
-    // Build and encrypt payload
+    if recipient_keys.len() > 1 {
+        eprintln!(
+            "Recipient has {} Ed25519 keys — opening parallel channels...",
+            recipient_keys.len()
+        );
+    }
+
+    // Build sender fingerprint
     let my_fingerprint = shenan_proto::ssh::SshEd25519PubKey {
         key_bytes: signing_key.verifying_key().to_bytes(),
         wire_bytes: shenan_proto::ssh::ed25519_to_ssh_wire(&signing_key.verifying_key().to_bytes()),
@@ -66,21 +80,29 @@ pub async fn run(
     }
     .fingerprint();
 
-    let payload = shenan_proto::payload::Payload::new(secrets, my_fingerprint);
-    let wire_payload = shenan_proto::payload::encrypt(&payload, &recipient_verifying)?;
+    // Encrypt payload separately per recipient key (each uses different DH)
+    let mut payloads = Vec::with_capacity(recipient_verifying_keys.len());
+    for vk in &recipient_verifying_keys {
+        let payload = shenan_proto::payload::Payload::new(secrets.clone(), my_fingerprint.clone());
+        let wire_payload = shenan_proto::payload::encrypt(&payload, vk)?;
+        payloads.push(Some(wire_payload));
+    }
 
-    // Run session
-    match session::run_session(
-        &config.relay,
+    let relay_url = relay_override.unwrap_or(config.relay);
+
+    // Run fan-out session
+    let result = fanout::fan_out_sessions(
+        &relay_url,
         &signing_key,
         &id.github_username,
-        &recipient_verifying,
+        &recipient_verifying_keys,
         Role::Sender,
-        Some(wire_payload),
+        payloads,
     )
-    .await?
-    {
-        session::SessionResult::Delivered => {
+    .await?;
+
+    match result.result {
+        crate::session::SessionResult::Delivered => {
             eprintln!("Delivered successfully.");
         }
         _ => unreachable!(),
@@ -98,4 +120,42 @@ fn parse_key_values(args: &[String]) -> Result<BTreeMap<String, String>> {
         map.insert(key.to_string(), value.to_string());
     }
     Ok(map)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_key_values;
+
+    #[test]
+    fn parse_key_values_basic() {
+        let args = vec!["API_KEY=abc".to_string(), "DB_URL=postgres://db".to_string()];
+        let parsed = parse_key_values(&args).unwrap();
+        assert_eq!(parsed["API_KEY"], "abc");
+        assert_eq!(parsed["DB_URL"], "postgres://db");
+    }
+
+    #[test]
+    fn parse_key_values_allows_value_with_equals() {
+        let args = vec!["TOKEN=abc=def==".to_string()];
+        let parsed = parse_key_values(&args).unwrap();
+        assert_eq!(parsed["TOKEN"], "abc=def==");
+    }
+
+    #[test]
+    fn parse_key_values_rejects_missing_equals() {
+        let args = vec!["BROKEN".to_string()];
+        assert!(parse_key_values(&args).is_err());
+    }
+
+    #[test]
+    fn parse_key_values_rejects_empty_key() {
+        let args = vec!["=value".to_string()];
+        assert!(parse_key_values(&args).is_err());
+    }
+
+    #[test]
+    fn parse_key_values_rejects_invalid_env_key_chars() {
+        let args = vec!["BAD-KEY=value".to_string()];
+        assert!(parse_key_values(&args).is_err());
+    }
 }

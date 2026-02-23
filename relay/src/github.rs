@@ -13,7 +13,7 @@ pub struct GitHubKeyCache {
 }
 
 struct CacheEntry {
-    result: Result<SshEd25519PubKey, String>,
+    result: Result<Vec<SshEd25519PubKey>, String>,
     fetched_at: Instant,
 }
 
@@ -25,10 +25,10 @@ impl GitHubKeyCache {
         }
     }
 
-    /// Fetch the single Ed25519 key for a GitHub user.
+    /// Fetch all Ed25519 keys for a GitHub user.
     ///
     /// Validates username format, fetches from GitHub, parses, and caches.
-    pub async fn fetch(&self, username: &str) -> Result<SshEd25519PubKey, String> {
+    pub async fn fetch(&self, username: &str) -> Result<Vec<SshEd25519PubKey>, String> {
         // Validate username: ^[a-zA-Z0-9\-]+$
         if !is_valid_github_username(username) {
             return Err("invalid GitHub username".into());
@@ -57,12 +57,12 @@ impl GitHubKeyCache {
         result
     }
 
-    /// Pre-insert a key into the cache (for testing without GitHub API).
-    pub fn insert(&self, username: &str, key: SshEd25519PubKey) {
+    /// Pre-insert keys into the cache (for testing without GitHub API).
+    pub fn insert(&self, username: &str, keys: Vec<SshEd25519PubKey>) {
         self.cache.insert(
             username.to_string(),
             CacheEntry {
-                result: Ok(key),
+                result: Ok(keys),
                 fetched_at: Instant::now(),
             },
         );
@@ -83,8 +83,8 @@ fn is_valid_github_username(username: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
-/// Fetch keys from URL and parse the single Ed25519 key.
-async fn fetch_and_parse(url: &str) -> Result<SshEd25519PubKey, String> {
+/// Fetch keys from URL and parse all Ed25519 keys.
+async fn fetch_and_parse(url: &str) -> Result<Vec<SshEd25519PubKey>, String> {
     let body = reqwest::get(url)
         .await
         .map_err(|e| format!("fetch failed: {e}"))?
@@ -92,7 +92,7 @@ async fn fetch_and_parse(url: &str) -> Result<SshEd25519PubKey, String> {
         .await
         .map_err(|e| format!("read body failed: {e}"))?;
 
-    shenan_proto::ssh::parse_single_ed25519(&body).map_err(|e| e.to_string())
+    shenan_proto::ssh::parse_ed25519_keys_required(&body).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -113,5 +113,9 @@ mod tests {
         assert!(!is_valid_github_username("user name"));
         assert!(!is_valid_github_username("user.name"));
         assert!(!is_valid_github_username("user@name"));
+        assert!(!is_valid_github_username("-alice"));
+        assert!(!is_valid_github_username("alice-"));
+        assert!(!is_valid_github_username("a".repeat(40).as_str()));
+        assert!(!is_valid_github_username("alice\nbob"));
     }
 }

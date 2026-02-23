@@ -53,8 +53,8 @@ pub async fn run_session(
 
     // Receive challenge
     let challenge_msg = read_text_message(&mut stream).await?;
-    let (nonce_hex, _fingerprint) = match wire::Message::from_json(&challenge_msg)? {
-        wire::Message::Challenge { nonce, pubkey_fingerprint } => (nonce, pubkey_fingerprint),
+    let (nonce_hex, _fingerprints) = match wire::Message::from_json(&challenge_msg)? {
+        wire::Message::Challenge { nonce, pubkey_fingerprints } => (nonce, pubkey_fingerprints),
         wire::Message::Error { code, message } => {
             anyhow::bail!("relay error: {code}{}", message.map(|m| format!(" — {m}")).unwrap_or_default());
         }

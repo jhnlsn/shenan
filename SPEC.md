@@ -121,7 +121,7 @@ This endpoint returns one or more public keys in OpenSSH authorized_keys format 
 
 ### Key selection
 
-The POC requires exactly one Ed25519 key per GitHub account. If no Ed25519 key is found, or if multiple Ed25519 keys are found, the CLI MUST fail with a clear error. This ensures both parties deterministically agree on the same key for channel derivation (§7.2) without ambiguity. See §15 for future multi-key support.
+A GitHub account MAY have one or more Ed25519 keys registered. If no Ed25519 key is found, the CLI MUST fail with a clear error. When multiple Ed25519 keys are found, the CLI opens parallel channels — one per counterpart key — so that whichever device the other party uses, one channel matches and secrets are delivered. All other sessions are cancelled on first success.
 
 ### Local identity
 
@@ -163,7 +163,7 @@ Client                                   Relay
 
 ### 6.3 Key fetching
 
-The relay fetches public keys from `https://github.com/{username}.keys`. The relay MUST validate the username against `^[a-zA-Z0-9\-]+$` (GitHub's username rules) before constructing the URL, to prevent SSRF via path traversal. If validation fails, the fetch fails, the response contains no Ed25519 keys, or the response contains more than one Ed25519 key, the relay returns `{"type":"error","code":"auth_failed"}` and closes the connection.
+The relay fetches public keys from `https://github.com/{username}.keys`. The relay MUST validate the username against `^[a-zA-Z0-9\-]+$` (GitHub's username rules) before constructing the URL, to prevent SSRF via path traversal. If validation fails, the fetch fails, or the response contains no Ed25519 keys, the relay returns `{"type":"error","code":"auth_failed"}` and closes the connection. Multiple Ed25519 keys are supported — the relay stores all of them for the challenge.
 
 ### 6.4 Challenge construction
 

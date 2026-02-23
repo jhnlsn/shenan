@@ -66,8 +66,8 @@ pub async fn handle_connection(
                             break;
                         }
 
-                        // Fetch GitHub keys
-                        let key = match github_cache.fetch(&user).await {
+                        // Fetch GitHub keys (all Ed25519 keys for this user)
+                        let keys = match github_cache.fetch(&user).await {
                             Ok(k) => k,
                             Err(_) => {
                                 let _ = send_error(&tx, wire::error_codes::AUTH_FAILED, None);
@@ -75,20 +75,28 @@ pub async fn handle_connection(
                             }
                         };
 
-                        let verifying_key = match key.to_verifying_key() {
-                            Ok(vk) => vk,
-                            Err(_) => {
-                                let _ = send_error(&tx, wire::error_codes::AUTH_FAILED, None);
-                                break;
+                        let mut verifying_keys = Vec::with_capacity(keys.len());
+                        let mut fingerprints = Vec::with_capacity(keys.len());
+                        for key in &keys {
+                            match key.to_verifying_key() {
+                                Ok(vk) => {
+                                    verifying_keys.push(vk);
+                                    fingerprints.push(key.fingerprint());
+                                }
+                                Err(_) => continue, // skip invalid keys
                             }
-                        };
+                        }
+
+                        if verifying_keys.is_empty() {
+                            let _ = send_error(&tx, wire::error_codes::AUTH_FAILED, None);
+                            break;
+                        }
 
                         let nonce_bytes = auth::generate_nonce();
-                        let fingerprint = key.fingerprint();
 
                         let challenge = wire::Message::Challenge {
                             nonce: hex::encode(nonce_bytes),
-                            pubkey_fingerprint: fingerprint,
+                            pubkey_fingerprints: fingerprints,
                         };
                         let _ = tx.send(Message::Text(challenge.to_json().unwrap()));
 
@@ -96,12 +104,12 @@ pub async fn handle_connection(
                         // then discarded per §6.6
                         auth_state = AuthState::AwaitingAuth {
                             nonce_bytes,
-                            verifying_key: Box::new(verifying_key),
+                            verifying_keys,
                         };
                     }
 
                     // ── Auth ──
-                    (AuthState::AwaitingAuth { nonce_bytes, verifying_key }, wire::Message::Auth { signature }) => {
+                    (AuthState::AwaitingAuth { nonce_bytes, verifying_keys }, wire::Message::Auth { signature }) => {
                         let sig_bytes = match base64::engine::general_purpose::STANDARD.decode(&signature) {
                             Ok(b) => b,
                             Err(_) => {
@@ -118,7 +126,7 @@ pub async fn handle_connection(
                             }
                         };
 
-                        if !auth::verify_auth_signature(verifying_key, nonce_bytes, &sig) {
+                        if !auth::verify_auth_signature_any(verifying_keys, nonce_bytes, &sig) {
                             let _ = send_error(&tx, wire::error_codes::AUTH_FAILED, None);
                             break;
                         }
@@ -177,10 +185,10 @@ pub async fn handle_connection(
                             pubkey_bytes_vec.as_slice().try_into().unwrap()
                         } else {
                             // Try parsing as SSH wire format
-                            match shenan_proto::ssh::parse_single_ed25519(
+                            match shenan_proto::ssh::parse_ed25519_keys_required(
                                 &format!("ssh-ed25519 {pubkey}")
                             ) {
-                                Ok(k) => k.key_bytes,
+                                Ok(keys) => keys[0].key_bytes,
                                 Err(_) => {
                                     let _ = send_error(&tx, wire::error_codes::AUTH_FAILED, "invalid pubkey format");
                                     break;

@@ -60,3 +60,29 @@ pub fn list() -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::parse_github_ref;
+
+    #[test]
+    fn parse_github_ref_valid() {
+        assert_eq!(parse_github_ref("github:alice-123").unwrap(), "alice-123");
+    }
+
+    #[test]
+    fn parse_github_ref_rejects_missing_prefix() {
+        assert!(parse_github_ref("alice").is_err());
+    }
+
+    #[test]
+    fn parse_github_ref_rejects_empty_username() {
+        assert!(parse_github_ref("github:").is_err());
+    }
+
+    #[test]
+    fn parse_github_ref_rejects_whitespace_and_path_chars() {
+        assert!(parse_github_ref("github:alice bob").is_err());
+        assert!(parse_github_ref("github:alice/../../etc/passwd").is_err());
+    }
+}

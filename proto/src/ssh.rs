@@ -34,16 +34,15 @@ impl SshEd25519PubKey {
     }
 }
 
-/// Parse an OpenSSH authorized_keys response and extract exactly one Ed25519 key.
+/// Parse an OpenSSH authorized_keys response and extract all Ed25519 keys.
 ///
-/// Returns an error if zero or more than one Ed25519 key is found.
-pub fn parse_single_ed25519(authorized_keys: &str) -> Result<SshEd25519PubKey, ProtoError> {
+/// Returns an error if zero Ed25519 keys are found. Multiple keys are supported.
+pub fn parse_ed25519_keys_required(authorized_keys: &str) -> Result<Vec<SshEd25519PubKey>, ProtoError> {
     let keys = parse_ed25519_keys(authorized_keys)?;
-    match keys.len() {
-        0 => Err(ProtoError::NoEd25519Key),
-        1 => Ok(keys.into_iter().next().unwrap()),
-        _ => Err(ProtoError::MultipleEd25519Keys),
+    if keys.is_empty() {
+        return Err(ProtoError::NoEd25519Key);
     }
+    Ok(keys)
 }
 
 /// Parse all Ed25519 keys from an authorized_keys string.
@@ -157,34 +156,39 @@ mod tests {
     #[test]
     fn parse_single_key() {
         let (expected_key, line) = make_test_key();
-        let key = parse_single_ed25519(&line).unwrap();
-        assert_eq!(key.key_bytes, expected_key);
+        let keys = parse_ed25519_keys_required(&line).unwrap();
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].key_bytes, expected_key);
     }
 
     #[test]
     fn parse_skips_non_ed25519() {
         let (_, ed_line) = make_test_key();
         let input = format!("ssh-rsa AAAA fake@example.com\n{ed_line}");
-        let key = parse_single_ed25519(&input).unwrap();
-        assert_eq!(key.key_bytes, [42u8; 32]);
+        let keys = parse_ed25519_keys_required(&input).unwrap();
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].key_bytes, [42u8; 32]);
     }
 
     #[test]
-    fn parse_rejects_multiple() {
+    fn parse_accepts_multiple() {
         let (_, line1) = make_test_key();
-        let (_, line2) = make_test_key();
+        let key_bytes_2 = [99u8; 32];
+        let wire_2 = ed25519_to_ssh_wire(&key_bytes_2);
+        let b64_2 = base64::engine::general_purpose::STANDARD.encode(&wire_2);
+        let line2 = format!("ssh-ed25519 {b64_2} second@example.com");
         let input = format!("{line1}\n{line2}");
-        assert!(matches!(
-            parse_single_ed25519(&input),
-            Err(ProtoError::MultipleEd25519Keys)
-        ));
+        let keys = parse_ed25519_keys_required(&input).unwrap();
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys[0].key_bytes, [42u8; 32]);
+        assert_eq!(keys[1].key_bytes, key_bytes_2);
     }
 
     #[test]
     fn parse_rejects_none() {
         let input = "ssh-rsa AAAA fake@host\n# comment\n";
         assert!(matches!(
-            parse_single_ed25519(input),
+            parse_ed25519_keys_required(input),
             Err(ProtoError::NoEd25519Key)
         ));
     }
@@ -192,8 +196,8 @@ mod tests {
     #[test]
     fn fingerprint_format() {
         let (_, line) = make_test_key();
-        let key = parse_single_ed25519(&line).unwrap();
-        let fp = key.fingerprint();
+        let keys = parse_ed25519_keys_required(&line).unwrap();
+        let fp = keys[0].fingerprint();
         assert!(fp.starts_with("SHA256:"));
     }
 
@@ -203,5 +207,59 @@ mod tests {
         let wire = ed25519_to_ssh_wire(&key_bytes);
         let extracted = extract_ed25519_from_wire(&wire).unwrap();
         assert_eq!(extracted, key_bytes);
+    }
+
+    #[test]
+    fn invalid_base64_rejected() {
+        let line = "ssh-ed25519 !!!not-base64!!! attacker@test";
+        assert!(matches!(
+            parse_ed25519_keys_required(line),
+            Err(ProtoError::InvalidSshKey(_))
+        ));
+    }
+
+    #[test]
+    fn truncated_wire_rejected() {
+        let b64 = base64::engine::general_purpose::STANDARD.encode([0u8; 3]);
+        let line = format!("ssh-ed25519 {b64}");
+        assert!(matches!(
+            parse_ed25519_keys_required(&line),
+            Err(ProtoError::InvalidSshKey(_))
+        ));
+    }
+
+    #[test]
+    fn wrong_wire_key_type_rejected() {
+        let key_type = b"ssh-rsa";
+        let mut wire = Vec::new();
+        wire.extend_from_slice(&(key_type.len() as u32).to_be_bytes());
+        wire.extend_from_slice(key_type);
+        wire.extend_from_slice(&32u32.to_be_bytes());
+        wire.extend_from_slice(&[9u8; 32]);
+
+        let b64 = base64::engine::general_purpose::STANDARD.encode(wire);
+        let line = format!("ssh-ed25519 {b64} wrong-type@test");
+
+        assert!(matches!(
+            parse_ed25519_keys_required(&line),
+            Err(ProtoError::InvalidSshKey(_))
+        ));
+    }
+
+    #[test]
+    fn wrong_key_length_rejected() {
+        let key_type = b"ssh-ed25519";
+        let mut wire = Vec::new();
+        wire.extend_from_slice(&(key_type.len() as u32).to_be_bytes());
+        wire.extend_from_slice(key_type);
+        wire.extend_from_slice(&31u32.to_be_bytes());
+        wire.extend_from_slice(&[1u8; 31]);
+
+        let b64 = base64::engine::general_purpose::STANDARD.encode(wire);
+        let line = format!("ssh-ed25519 {b64} badlen@test");
+        assert!(matches!(
+            parse_ed25519_keys_required(&line),
+            Err(ProtoError::InvalidSshKey(_))
+        ));
     }
 }

@@ -5,9 +5,6 @@ pub enum ProtoError {
     #[error("no Ed25519 key found")]
     NoEd25519Key,
 
-    #[error("multiple Ed25519 keys found — exactly one required")]
-    MultipleEd25519Keys,
-
     #[error("invalid SSH key format: {0}")]
     InvalidSshKey(String),
 

@@ -23,7 +23,7 @@ pub async fn run(config: RelayConfig) -> Result<(), Box<dyn std::error::Error>> 
     }
 
     let listener = TcpListener::bind(&config.bind).await?;
-    eprintln!("shenan-relay listening on {}", config.bind);
+    tracing::info!("shenan-relay listening on {}", config.bind);
 
     // Determine if TLS is configured
     let tls_acceptor = if let (Some(cert_path), Some(key_path)) = (&config.tls_cert, &config.tls_key) {
@@ -36,7 +36,7 @@ pub async fn run(config: RelayConfig) -> Result<(), Box<dyn std::error::Error>> 
 
         Some(tokio_rustls::TlsAcceptor::from(Arc::new(server_config)))
     } else {
-        eprintln!("WARNING: running without TLS (test mode only)");
+        tracing::warn!("running without TLS (test mode only)");
         None
     };
 
@@ -57,12 +57,12 @@ pub async fn run(config: RelayConfig) -> Result<(), Box<dyn std::error::Error>> 
                                 connection::handle_connection(ws, peer_addr, state, github_cache).await;
                             }
                             Err(e) => {
-                                eprintln!("WebSocket handshake failed from {peer_addr}: {e}");
+                                tracing::debug!("WebSocket handshake failed from {peer_addr}: {e}");
                             }
                         }
                     }
                     Err(e) => {
-                        eprintln!("TLS handshake failed from {peer_addr}: {e}");
+                        tracing::debug!("TLS handshake failed from {peer_addr}: {e}");
                     }
                 }
             } else {

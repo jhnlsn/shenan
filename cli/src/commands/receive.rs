@@ -5,15 +5,17 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 
 use crate::dotenv;
+use crate::fanout;
 use crate::github;
 use crate::identity;
-use crate::session::{self, Role};
+use crate::session::Role;
 use crate::storage;
 
 pub async fn run(
     from: &str,
     out: Option<PathBuf>,
     merge: bool,
+    relay_override: Option<String>,
 ) -> Result<()> {
     let from_username = from
         .strip_prefix("github:")
@@ -34,25 +36,46 @@ pub async fn run(
         );
     }
 
-    // Fetch sender's public key from GitHub
-    let sender_key = github::fetch_ed25519_pubkey(from_username).await?;
-    let sender_verifying = sender_key.to_verifying_key()
-        .map_err(|e| anyhow::anyhow!("invalid sender key: {e}"))?;
+    // Fetch sender's public keys from GitHub (may be multiple)
+    let sender_keys = github::fetch_ed25519_pubkeys(from_username).await?;
+    let mut sender_verifying_keys = Vec::with_capacity(sender_keys.len());
+    for key in &sender_keys {
+        sender_verifying_keys.push(
+            key.to_verifying_key()
+                .map_err(|e| anyhow::anyhow!("invalid sender key: {e}"))?,
+        );
+    }
+
+    // Collect all sender fingerprints for verification
+    let sender_fingerprints: Vec<String> = sender_keys.iter().map(|k| k.fingerprint()).collect();
+
+    if sender_keys.len() > 1 {
+        eprintln!(
+            "Sender has {} Ed25519 keys — opening parallel channels...",
+            sender_keys.len()
+        );
+    }
+
+    let relay_url = relay_override.unwrap_or(config.relay);
 
     eprintln!("Waiting for secrets from {}...", from_username);
 
-    // Run session
-    let wire_payload = match session::run_session(
-        &config.relay,
+    // Build payloads (None for receiver on each channel)
+    let payloads = vec![None; sender_verifying_keys.len()];
+
+    // Run fan-out session
+    let result = fanout::fan_out_sessions(
+        &relay_url,
         &signing_key,
         &id.github_username,
-        &sender_verifying,
+        &sender_verifying_keys,
         Role::Receiver,
-        None,
+        payloads,
     )
-    .await?
-    {
-        session::SessionResult::Received(data) => data,
+    .await?;
+
+    let wire_payload = match result.result {
+        crate::session::SessionResult::Received(data) => data,
         _ => unreachable!(),
     };
 
@@ -60,12 +83,12 @@ pub async fn run(
     let payload = shenan_proto::payload::decrypt(&wire_payload, &signing_key)
         .context("failed to decrypt payload — the sender may not have your correct public key")?;
 
-    // Verify sender fingerprint matches trusted sender
-    let expected_fingerprint = sender_key.fingerprint();
-    if payload.sender_pubkey_fingerprint != expected_fingerprint {
+    // Verify sender fingerprint is in the known fingerprints list
+    if !sender_fingerprints.contains(&payload.sender_pubkey_fingerprint) {
         anyhow::bail!(
-            "sender fingerprint mismatch: expected {expected_fingerprint}, got {}",
-            payload.sender_pubkey_fingerprint
+            "sender fingerprint mismatch: got {}, expected one of: {}",
+            payload.sender_pubkey_fingerprint,
+            sender_fingerprints.join(", ")
         );
     }
 

@@ -43,18 +43,19 @@ pub async fn run() -> Result<()> {
 
     // Verify key is on GitHub
     eprintln!("Verifying key on GitHub...");
-    match crate::github::fetch_ed25519_pubkey(&github_username).await {
-        Ok(github_key) => {
+    match crate::github::fetch_ed25519_pubkeys(&github_username).await {
+        Ok(github_keys) => {
             let local_key = identity::load_signing_key(&selected.path)?;
             let local_pub = local_key.verifying_key().to_bytes();
-            if local_pub != github_key.key_bytes {
+            if !github_keys.iter().any(|k| k.key_bytes == local_pub) {
+                let github_fps: Vec<String> = github_keys.iter().map(|k| k.fingerprint()).collect();
                 anyhow::bail!(
-                    "The selected local key does not match the Ed25519 key on GitHub for {}.\n\
+                    "The selected local key is not among the Ed25519 keys on GitHub for {}.\n\
                      Local fingerprint: {}\n\
-                     GitHub fingerprint: {}",
+                     GitHub fingerprints: {}",
                     github_username,
                     selected.fingerprint,
-                    github_key.fingerprint()
+                    github_fps.join(", ")
                 );
             }
             eprintln!("Key verified on GitHub.");

@@ -11,7 +11,7 @@ pub enum AuthState {
     /// Challenge sent, waiting for `auth` response.
     AwaitingAuth {
         nonce_bytes: [u8; 32],
-        verifying_key: Box<VerifyingKey>,
+        verifying_keys: Vec<VerifyingKey>,
     },
     /// Successfully authenticated.
     Authenticated,
@@ -33,4 +33,16 @@ pub fn verify_auth_signature(
     use ed25519_dalek::Verifier;
     let hash = Sha256::digest(nonce_bytes);
     verifying_key.verify(&hash, signature).is_ok()
+}
+
+/// Verify an auth signature against any of the provided keys.
+/// Returns true if the signature is valid for at least one key.
+pub fn verify_auth_signature_any(
+    verifying_keys: &[VerifyingKey],
+    nonce_bytes: &[u8; 32],
+    signature: &Signature,
+) -> bool {
+    verifying_keys
+        .iter()
+        .any(|vk| verify_auth_signature(vk, nonce_bytes, signature))
 }

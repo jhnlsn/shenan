@@ -76,7 +76,7 @@ pub struct Challenge {
     #[serde(rename = "type")]
     pub msg_type: ChallengeType,
     pub nonce: String, // hex-encoded 32 bytes
-    pub pubkey_fingerprint: String,
+    pub pubkey_fingerprints: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -155,7 +155,7 @@ pub enum Message {
     #[serde(rename = "challenge")]
     Challenge {
         nonce: String,
-        pubkey_fingerprint: String,
+        pubkey_fingerprints: Vec<String>,
     },
     #[serde(rename = "auth")]
     Auth {
@@ -258,5 +258,50 @@ mod tests {
             }
             _ => panic!("wrong variant"),
         }
+    }
+
+    #[test]
+    fn reject_unknown_message_type() {
+        let json = r#"{"type":"totally_fake","x":1}"#;
+        assert!(Message::from_json(json).is_err());
+    }
+
+    #[test]
+    fn reject_missing_required_fields() {
+        let json = r#"{"type":"hello","version":1}"#;
+        assert!(Message::from_json(json).is_err());
+    }
+
+    #[test]
+    fn reject_wrong_field_types() {
+        let json = r#"{"type":"channel","token":123,"proof":true,"pubkey":[]}"#;
+        assert!(Message::from_json(json).is_err());
+    }
+
+    #[test]
+    fn channel_round_trip() {
+        let msg = Message::Channel {
+            token: "a".repeat(64),
+            proof: "Zm9v".into(),
+            pubkey: "YmFy".into(),
+        };
+        let json = msg.to_json().unwrap();
+        let parsed = Message::from_json(&json).unwrap();
+        match parsed {
+            Message::Channel { token, proof, pubkey } => {
+                assert_eq!(token, "a".repeat(64));
+                assert_eq!(proof, "Zm9v");
+                assert_eq!(pubkey, "YmFy");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn received_round_trip() {
+        let msg = Message::Received;
+        let json = msg.to_json().unwrap();
+        let parsed = Message::from_json(&json).unwrap();
+        assert!(matches!(parsed, Message::Received));
     }
 }

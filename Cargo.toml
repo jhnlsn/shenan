@@ -42,7 +42,9 @@ rustls-pemfile = "2"
 
 # Misc
 dashmap = "6"
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 dialoguer = "0.11"
 toml = "0.8"
 dirs = "5"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

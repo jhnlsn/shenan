@@ -178,4 +178,41 @@ mod tests {
         assert!(decrypt(&wire1, &recipient).is_ok());
         assert!(decrypt(&wire2, &recipient).is_ok());
     }
+
+    #[test]
+    fn tampered_ciphertext_fails() {
+        let recipient = SigningKey::generate(&mut OsRng);
+        let mut secrets = BTreeMap::new();
+        secrets.insert("TOKEN".into(), "abc123".into());
+
+        let payload = Payload::new(secrets, "SHA256:sender".into());
+        let mut wire = encrypt(&payload, &recipient.verifying_key()).unwrap();
+        let last = wire.len() - 1;
+        wire[last] ^= 0x01;
+
+        assert!(decrypt(&wire, &recipient).is_err());
+    }
+
+    #[test]
+    fn tampered_header_fails() {
+        let recipient = SigningKey::generate(&mut OsRng);
+        let mut secrets = BTreeMap::new();
+        secrets.insert("TOKEN".into(), "abc123".into());
+
+        let payload = Payload::new(secrets, "SHA256:sender".into());
+        let mut wire = encrypt(&payload, &recipient.verifying_key()).unwrap();
+        wire[0] ^= 0x01; // mutate ephemeral pubkey
+
+        assert!(decrypt(&wire, &recipient).is_err());
+    }
+
+    #[test]
+    fn payload_too_short_boundary() {
+        let recipient = SigningKey::generate(&mut OsRng);
+        let short = vec![0u8; HEADER_LEN - 1];
+        assert!(matches!(
+            decrypt(&short, &recipient),
+            Err(ProtoError::PayloadTooShort { .. })
+        ));
+    }
 }

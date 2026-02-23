@@ -20,7 +20,44 @@ cargo test --workspace
 cargo clippy --all-targets
 ```
 
-Rust 1.70+ is required.
+Rust 1.75+ is required.
+
+---
+
+## Local development workflow
+
+Start a local relay (no TLS, test mode):
+
+```bash
+cargo run -p shenan-relay -- --bind 127.0.0.1:9000
+```
+
+Point the CLI at it using any of these (highest priority first):
+
+```bash
+# Flag
+shenan send --relay ws://127.0.0.1:9000 --to github:alice KEY=val
+
+# Environment variable
+SHENAN_RELAY=ws://127.0.0.1:9000 shenan send --to github:alice KEY=val
+
+# Persistent config
+shenan config set relay ws://127.0.0.1:9000
+```
+
+### Logging
+
+The relay respects `--log-level` / `SHENAN_LOG` (trace, debug, info, warn, error):
+
+```bash
+SHENAN_LOG=debug cargo run -p shenan-relay -- --bind 127.0.0.1:9000
+```
+
+The CLI has a `--verbose` / `-v` flag (or `SHENAN_VERBOSE=1`) that enables debug output:
+
+```bash
+shenan -v send --to github:alice KEY=val
+```
 
 ---
 

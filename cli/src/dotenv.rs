@@ -175,4 +175,48 @@ REDIS_URL='redis://localhost:6379'
     fn invalid_key_rejected() {
         assert!(parse_dotenv("123BAD=value").is_err());
     }
+
+    #[test]
+    fn missing_equals_rejected() {
+        assert!(parse_dotenv("NO_EQUALS_LINE").is_err());
+    }
+
+    #[test]
+    fn duplicate_keys_last_wins() {
+        let parsed = parse_dotenv("A=1\nA=2\n").unwrap();
+        assert_eq!(parsed["A"], "2");
+    }
+
+    #[test]
+    fn value_with_equals_is_preserved() {
+        let parsed = parse_dotenv("TOKEN=abc=def==\n").unwrap();
+        assert_eq!(parsed["TOKEN"], "abc=def==");
+    }
+
+    #[test]
+    fn trims_whitespace_around_key_and_value() {
+        let parsed = parse_dotenv("   API_KEY   =   secret   \n").unwrap();
+        assert_eq!(parsed["API_KEY"], "secret");
+    }
+
+    #[test]
+    fn quoted_and_unbalanced_quotes_behavior() {
+        let parsed = parse_dotenv("A=\"ok\"\nB=\"unterminated\n").unwrap();
+        assert_eq!(parsed["A"], "ok");
+        assert_eq!(parsed["B"], "\"unterminated");
+    }
+
+    #[test]
+    fn merge_preserves_comments_and_updates_known_keys() {
+        let existing = "# comment\nA=old\nNOT_A_KV_LINE\n";
+        let mut new = BTreeMap::new();
+        new.insert("A".into(), "new".into());
+        new.insert("B".into(), "added".into());
+
+        let merged = merge_dotenv(existing, &new);
+        assert!(merged.contains("# comment"));
+        assert!(merged.contains("A=new"));
+        assert!(merged.contains("NOT_A_KV_LINE"));
+        assert!(merged.contains("B=added"));
+    }
 }
