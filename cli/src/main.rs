@@ -103,8 +103,7 @@ async fn main() {
     let default_level = if cli.verbose { "debug" } else { "warn" };
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new(default_level)),
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_level)),
         )
         .init();
 
@@ -116,12 +115,16 @@ async fn main() {
             from_file,
             relay,
         } => {
-            let stdin = !atty::is(atty::Stream::Stdin) && from_file.is_none() && key_values.is_empty();
+            let stdin =
+                !atty::is(atty::Stream::Stdin) && from_file.is_none() && key_values.is_empty();
             commands::send::run(&to, key_values, from_file, stdin, relay).await
         }
-        Commands::Receive { from, out, merge, relay } => {
-            commands::receive::run(&from, out, merge, relay).await
-        }
+        Commands::Receive {
+            from,
+            out,
+            merge,
+            relay,
+        } => commands::receive::run(&from, out, merge, relay).await,
         Commands::Trust { action } => match action {
             TrustAction::Add { target } => commands::trust::add(&target),
             TrustAction::Remove { target } => commands::trust::remove(&target),

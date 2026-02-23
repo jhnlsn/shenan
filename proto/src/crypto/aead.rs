@@ -22,7 +22,11 @@ pub fn encrypt(key: &[u8; 32], nonce: &[u8; 12], plaintext: &[u8]) -> Result<Vec
 /// Decrypt ciphertext using ChaCha20-Poly1305.
 ///
 /// Input includes the 16-byte auth tag.
-pub fn decrypt(key: &[u8; 32], nonce: &[u8; 12], ciphertext: &[u8]) -> Result<Zeroizing<Vec<u8>>, ProtoError> {
+pub fn decrypt(
+    key: &[u8; 32],
+    nonce: &[u8; 12],
+    ciphertext: &[u8],
+) -> Result<Zeroizing<Vec<u8>>, ProtoError> {
     let cipher = ChaCha20Poly1305::new(key.into());
     let nonce = Nonce::from_slice(nonce);
     cipher

@@ -71,7 +71,8 @@ impl GitHubKeyCache {
     /// Remove expired entries.
     #[allow(dead_code)]
     pub fn sweep(&self) {
-        self.cache.retain(|_, entry| entry.fetched_at.elapsed() < self.ttl);
+        self.cache
+            .retain(|_, entry| entry.fetched_at.elapsed() < self.ttl);
     }
 }
 

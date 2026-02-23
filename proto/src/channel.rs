@@ -85,18 +85,9 @@ mod tests {
         let window = 123456u64;
 
         // Alice is sender, Bob is recipient
-        let token_alice = derive_token(
-            &alice,
-            &alice.verifying_key(),
-            &bob.verifying_key(),
-            window,
-        );
-        let token_bob = derive_token(
-            &bob,
-            &alice.verifying_key(),
-            &bob.verifying_key(),
-            window,
-        );
+        let token_alice =
+            derive_token(&alice, &alice.verifying_key(), &bob.verifying_key(), window);
+        let token_bob = derive_token(&bob, &alice.verifying_key(), &bob.verifying_key(), window);
 
         assert_eq!(*token_alice, *token_bob);
     }
@@ -119,19 +110,9 @@ mod tests {
         let eve = SigningKey::generate(&mut OsRng);
 
         let window = 42u64;
-        let real_token = derive_token(
-            &alice,
-            &alice.verifying_key(),
-            &bob.verifying_key(),
-            window,
-        );
+        let real_token = derive_token(&alice, &alice.verifying_key(), &bob.verifying_key(), window);
         // Eve tries to derive using her own key
-        let eve_token = derive_token(
-            &eve,
-            &alice.verifying_key(),
-            &bob.verifying_key(),
-            window,
-        );
+        let eve_token = derive_token(&eve, &alice.verifying_key(), &bob.verifying_key(), window);
         assert_ne!(*real_token, *eve_token);
     }
 
@@ -141,12 +122,7 @@ mod tests {
         let bob = SigningKey::generate(&mut OsRng);
         let window = 99u64;
 
-        let token = derive_token(
-            &alice,
-            &alice.verifying_key(),
-            &bob.verifying_key(),
-            window,
-        );
+        let token = derive_token(&alice, &alice.verifying_key(), &bob.verifying_key(), window);
         let proof = sign_token(&alice, &token);
         assert!(verify_proof(&alice.verifying_key(), &token, &proof).is_ok());
         // Bob's key can't verify Alice's proof

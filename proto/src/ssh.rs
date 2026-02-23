@@ -37,7 +37,9 @@ impl SshEd25519PubKey {
 /// Parse an OpenSSH authorized_keys response and extract all Ed25519 keys.
 ///
 /// Returns an error if zero Ed25519 keys are found. Multiple keys are supported.
-pub fn parse_ed25519_keys_required(authorized_keys: &str) -> Result<Vec<SshEd25519PubKey>, ProtoError> {
+pub fn parse_ed25519_keys_required(
+    authorized_keys: &str,
+) -> Result<Vec<SshEd25519PubKey>, ProtoError> {
     let keys = parse_ed25519_keys(authorized_keys)?;
     if keys.is_empty() {
         return Err(ProtoError::NoEd25519Key);

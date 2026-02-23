@@ -7,9 +7,9 @@ use futures_util::{SinkExt, StreamExt};
 use sha2::{Digest, Sha256};
 use tokio_tungstenite::tungstenite::Message;
 
-use shenan_proto::wire;
-use shenan_proto::ssh;
 use shenan_proto::channel;
+use shenan_proto::ssh;
+use shenan_proto::wire;
 
 /// Role in a shenan session.
 #[derive(Debug, Clone, Copy)]
@@ -54,9 +54,15 @@ pub async fn run_session(
     // Receive challenge
     let challenge_msg = read_text_message(&mut stream).await?;
     let (nonce_hex, _fingerprints) = match wire::Message::from_json(&challenge_msg)? {
-        wire::Message::Challenge { nonce, pubkey_fingerprints } => (nonce, pubkey_fingerprints),
+        wire::Message::Challenge {
+            nonce,
+            pubkey_fingerprints,
+        } => (nonce, pubkey_fingerprints),
         wire::Message::Error { code, message } => {
-            anyhow::bail!("relay error: {code}{}", message.map(|m| format!(" — {m}")).unwrap_or_default());
+            anyhow::bail!(
+                "relay error: {code}{}",
+                message.map(|m| format!(" — {m}")).unwrap_or_default()
+            );
         }
         other => anyhow::bail!("unexpected message: {other:?}"),
     };
@@ -76,7 +82,10 @@ pub async fn run_session(
     match wire::Message::from_json(&auth_resp)? {
         wire::Message::Authenticated => {}
         wire::Message::Error { code, message } => {
-            anyhow::bail!("auth failed: {code}{}", message.map(|m| format!(" — {m}")).unwrap_or_default());
+            anyhow::bail!(
+                "auth failed: {code}{}",
+                message.map(|m| format!(" — {m}")).unwrap_or_default()
+            );
         }
         other => anyhow::bail!("unexpected message: {other:?}"),
     }
@@ -91,10 +100,15 @@ pub async fn run_session(
 
     // Try current window, then window-1, then window+1
     let result = try_channel_join(
-        &mut sink, &mut stream,
-        signing_key, sender_pub, recipient_pub,
-        role, payload_data,
-    ).await;
+        &mut sink,
+        &mut stream,
+        signing_key,
+        sender_pub,
+        recipient_pub,
+        role,
+        payload_data,
+    )
+    .await;
 
     result
 }
@@ -145,11 +159,16 @@ where
                     wire::Message::Connected => {
                         return handle_pipe(sink, stream, role, payload_data).await;
                     }
-                    wire::Message::Error { code, .. } if code == wire::error_codes::CHANNEL_EXPIRED && attempt < 2 => {
+                    wire::Message::Error { code, .. }
+                        if code == wire::error_codes::CHANNEL_EXPIRED && attempt < 2 =>
+                    {
                         continue; // try next window
                     }
                     wire::Message::Error { code, message } => {
-                        anyhow::bail!("channel error: {code}{}", message.map(|m| format!(" — {m}")).unwrap_or_default());
+                        anyhow::bail!(
+                            "channel error: {code}{}",
+                            message.map(|m| format!(" — {m}")).unwrap_or_default()
+                        );
                     }
                     other => anyhow::bail!("unexpected: {other:?}"),
                 }
@@ -157,11 +176,16 @@ where
             wire::Message::Connected => {
                 return handle_pipe(sink, stream, role, payload_data).await;
             }
-            wire::Message::Error { code, .. } if code == wire::error_codes::CHANNEL_EXPIRED && attempt < 2 => {
+            wire::Message::Error { code, .. }
+                if code == wire::error_codes::CHANNEL_EXPIRED && attempt < 2 =>
+            {
                 continue; // try next window
             }
             wire::Message::Error { code, message } => {
-                anyhow::bail!("channel error: {code}{}", message.map(|m| format!(" — {m}")).unwrap_or_default());
+                anyhow::bail!(
+                    "channel error: {code}{}",
+                    message.map(|m| format!(" — {m}")).unwrap_or_default()
+                );
             }
             other => anyhow::bail!("unexpected: {other:?}"),
         }

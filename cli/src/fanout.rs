@@ -49,11 +49,16 @@ pub async fn fan_out_sessions(
         });
     }
 
-    let (result_tx, mut result_rx) = mpsc::channel::<(usize, Result<SessionResult>)>(counterpart_keys.len());
+    let (result_tx, mut result_rx) =
+        mpsc::channel::<(usize, Result<SessionResult>)>(counterpart_keys.len());
 
     let mut handles = Vec::with_capacity(counterpart_keys.len());
 
-    for (i, (key, payload)) in counterpart_keys.iter().zip(payloads.into_iter()).enumerate() {
+    for (i, (key, payload)) in counterpart_keys
+        .iter()
+        .zip(payloads.into_iter())
+        .enumerate()
+    {
         let relay_url = relay_url.to_string();
         let signing_key = signing_key.clone();
         let my_github = my_github.to_string();
@@ -61,15 +66,9 @@ pub async fn fan_out_sessions(
         let result_tx = result_tx.clone();
 
         let handle = tokio::spawn(async move {
-            let res = session::run_session(
-                &relay_url,
-                &signing_key,
-                &my_github,
-                &key,
-                role,
-                payload,
-            )
-            .await;
+            let res =
+                session::run_session(&relay_url, &signing_key, &my_github, &key, role, payload)
+                    .await;
             let _ = result_tx.send((i, res)).await;
         });
         handles.push(handle);

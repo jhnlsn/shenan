@@ -26,19 +26,20 @@ pub async fn run(config: RelayConfig) -> Result<(), Box<dyn std::error::Error>> 
     tracing::info!("shenan-relay listening on {}", config.bind);
 
     // Determine if TLS is configured
-    let tls_acceptor = if let (Some(cert_path), Some(key_path)) = (&config.tls_cert, &config.tls_key) {
-        let certs = load_certs(cert_path)?;
-        let key = load_key(key_path)?;
+    let tls_acceptor =
+        if let (Some(cert_path), Some(key_path)) = (&config.tls_cert, &config.tls_key) {
+            let certs = load_certs(cert_path)?;
+            let key = load_key(key_path)?;
 
-        let server_config = rustls::ServerConfig::builder()
-            .with_no_client_auth()
-            .with_single_cert(certs, key)?;
+            let server_config = rustls::ServerConfig::builder()
+                .with_no_client_auth()
+                .with_single_cert(certs, key)?;
 
-        Some(tokio_rustls::TlsAcceptor::from(Arc::new(server_config)))
-    } else {
-        tracing::warn!("running without TLS (test mode only)");
-        None
-    };
+            Some(tokio_rustls::TlsAcceptor::from(Arc::new(server_config)))
+        } else {
+            tracing::warn!("running without TLS (test mode only)");
+            None
+        };
 
     loop {
         let (tcp_stream, peer_addr) = listener.accept().await?;
@@ -51,16 +52,14 @@ pub async fn run(config: RelayConfig) -> Result<(), Box<dyn std::error::Error>> 
             if let Some(tls_acceptor) = tls_acceptor {
                 // TLS mode
                 match tls_acceptor.accept(tcp_stream).await {
-                    Ok(tls_stream) => {
-                        match accept_async(tls_stream).await {
-                            Ok(ws) => {
-                                connection::handle_connection(ws, peer_addr, state, github_cache).await;
-                            }
-                            Err(e) => {
-                                tracing::debug!("WebSocket handshake failed from {peer_addr}: {e}");
-                            }
+                    Ok(tls_stream) => match accept_async(tls_stream).await {
+                        Ok(ws) => {
+                            connection::handle_connection(ws, peer_addr, state, github_cache).await;
                         }
-                    }
+                        Err(e) => {
+                            tracing::debug!("WebSocket handshake failed from {peer_addr}: {e}");
+                        }
+                    },
                     Err(e) => {
                         tracing::debug!("TLS handshake failed from {peer_addr}: {e}");
                     }
@@ -117,8 +116,7 @@ fn load_certs(
 ) -> Result<Vec<rustls::pki_types::CertificateDer<'static>>, Box<dyn std::error::Error>> {
     let file = std::fs::File::open(path)?;
     let mut reader = std::io::BufReader::new(file);
-    let certs = rustls_pemfile::certs(&mut reader)
-        .collect::<Result<Vec<_>, _>>()?;
+    let certs = rustls_pemfile::certs(&mut reader).collect::<Result<Vec<_>, _>>()?;
     Ok(certs)
 }
 
@@ -127,7 +125,6 @@ fn load_key(
 ) -> Result<rustls::pki_types::PrivateKeyDer<'static>, Box<dyn std::error::Error>> {
     let file = std::fs::File::open(path)?;
     let mut reader = std::io::BufReader::new(file);
-    let key = rustls_pemfile::private_key(&mut reader)?
-        .ok_or("no private key found in file")?;
+    let key = rustls_pemfile::private_key(&mut reader)?.ok_or("no private key found in file")?;
     Ok(key)
 }

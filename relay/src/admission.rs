@@ -10,11 +10,11 @@ pub fn verify_channel_proof(
     token_bytes: &[u8; 32],
     proof_bytes: &[u8],
 ) -> Result<(), String> {
-    let verifying_key = VerifyingKey::from_bytes(pubkey_bytes)
-        .map_err(|e| format!("invalid pubkey: {e}"))?;
+    let verifying_key =
+        VerifyingKey::from_bytes(pubkey_bytes).map_err(|e| format!("invalid pubkey: {e}"))?;
 
-    let signature = Signature::from_slice(proof_bytes)
-        .map_err(|e| format!("invalid signature: {e}"))?;
+    let signature =
+        Signature::from_slice(proof_bytes).map_err(|e| format!("invalid signature: {e}"))?;
 
     channel::verify_proof(&verifying_key, token_bytes, &signature)
         .map_err(|e| format!("proof verification failed: {e}"))

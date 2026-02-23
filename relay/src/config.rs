@@ -113,11 +113,8 @@ mod tests {
 
     #[test]
     fn relay_args_reject_non_numeric_limits() {
-        let parsed = RelayArgs::try_parse_from([
-            "shenan-relay",
-            "--max-payload-size",
-            "not-a-number",
-        ]);
+        let parsed =
+            RelayArgs::try_parse_from(["shenan-relay", "--max-payload-size", "not-a-number"]);
         assert!(parsed.is_err());
     }
 }

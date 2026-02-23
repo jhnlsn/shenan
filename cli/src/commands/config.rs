@@ -1,7 +1,7 @@
 //! `shenan config set/get` — relay URL management.
 
-use anyhow::Result;
 use crate::storage;
+use anyhow::Result;
 
 pub fn set(key: &str, value: &str) -> Result<()> {
     let mut config = storage::load_config()?;

@@ -64,12 +64,17 @@ async fn connect_and_auth(
         version: wire::PROTOCOL_VERSION,
         user: username.to_string(),
     };
-    sink.send(Message::Text(hello.to_json().unwrap())).await.unwrap();
+    sink.send(Message::Text(hello.to_json().unwrap()))
+        .await
+        .unwrap();
 
     // Receive challenge
     let challenge_text = read_text(&mut stream).await;
     let nonce_hex = match wire::Message::from_json(&challenge_text).unwrap() {
-        wire::Message::Challenge { nonce, pubkey_fingerprints } => {
+        wire::Message::Challenge {
+            nonce,
+            pubkey_fingerprints,
+        } => {
             assert!(
                 !pubkey_fingerprints.is_empty(),
                 "challenge should include at least one pubkey fingerprint"
@@ -87,7 +92,9 @@ async fn connect_and_auth(
     let auth = wire::Message::Auth {
         signature: base64::engine::general_purpose::STANDARD.encode(signature.to_bytes()),
     };
-    sink.send(Message::Text(auth.to_json().unwrap())).await.unwrap();
+    sink.send(Message::Text(auth.to_json().unwrap()))
+        .await
+        .unwrap();
 
     // Wait for authenticated
     let auth_resp = read_text(&mut stream).await;
@@ -118,7 +125,9 @@ async fn send_channel_join(
         pubkey: base64::engine::general_purpose::STANDARD.encode(&my_pub_wire),
     };
 
-    sink.send(Message::Text(channel_msg.to_json().unwrap())).await.unwrap();
+    sink.send(Message::Text(channel_msg.to_json().unwrap()))
+        .await
+        .unwrap();
 
     let resp = read_text(stream).await;
     wire::Message::from_json(&resp).unwrap()
@@ -183,7 +192,10 @@ async fn full_send_receive_cycle() {
     // Build encrypted payload (alice → bob)
     let mut secrets = BTreeMap::new();
     secrets.insert("API_KEY".to_string(), "sk-secret-123".to_string());
-    secrets.insert("DB_URL".to_string(), "postgres://localhost/mydb".to_string());
+    secrets.insert(
+        "DB_URL".to_string(),
+        "postgres://localhost/mydb".to_string(),
+    );
 
     let sender_fingerprint = {
         let wire = ssh::ed25519_to_ssh_wire(&alice_pub.to_bytes());
@@ -198,10 +210,8 @@ async fn full_send_receive_cycle() {
     let window = channel::current_window();
 
     // Connect and authenticate both parties
-    let (mut alice_sink, mut alice_stream) =
-        connect_and_auth(&url, &alice_key, "alice").await;
-    let (mut bob_sink, mut bob_stream) =
-        connect_and_auth(&url, &bob_key, "bob").await;
+    let (mut alice_sink, mut alice_stream) = connect_and_auth(&url, &alice_key, "alice").await;
+    let (mut bob_sink, mut bob_stream) = connect_and_auth(&url, &bob_key, "bob").await;
 
     // Alice joins channel first (sender) — alice is sender, bob is recipient
     let alice_resp = send_channel_join(
@@ -250,7 +260,10 @@ async fn full_send_receive_cycle() {
 
     // Bob receives the binary payload
     let received_data = read_binary(&mut bob_stream).await;
-    assert_eq!(received_data, encrypted, "payload should arrive byte-for-byte identical");
+    assert_eq!(
+        received_data, encrypted,
+        "payload should arrive byte-for-byte identical"
+    );
 
     // Bob sends received ACK
     let ack = wire::Message::Received;
@@ -289,7 +302,9 @@ async fn wrong_version_rejected() {
         version: 99,
         user: "alice".to_string(),
     };
-    sink.send(Message::Text(hello.to_json().unwrap())).await.unwrap();
+    sink.send(Message::Text(hello.to_json().unwrap()))
+        .await
+        .unwrap();
 
     let resp = read_text(&mut stream).await;
     match wire::Message::from_json(&resp).unwrap() {
@@ -320,7 +335,9 @@ async fn auth_with_wrong_key_rejected() {
         version: wire::PROTOCOL_VERSION,
         user: "alice".to_string(),
     };
-    sink.send(Message::Text(hello.to_json().unwrap())).await.unwrap();
+    sink.send(Message::Text(hello.to_json().unwrap()))
+        .await
+        .unwrap();
 
     // Get challenge
     let challenge_text = read_text(&mut stream).await;
@@ -337,7 +354,9 @@ async fn auth_with_wrong_key_rejected() {
     let auth = wire::Message::Auth {
         signature: base64::engine::general_purpose::STANDARD.encode(signature.to_bytes()),
     };
-    sink.send(Message::Text(auth.to_json().unwrap())).await.unwrap();
+    sink.send(Message::Text(auth.to_json().unwrap()))
+        .await
+        .unwrap();
 
     let resp = read_text(&mut stream).await;
     match wire::Message::from_json(&resp).unwrap() {
@@ -389,7 +408,10 @@ async fn same_pubkey_both_sides_rejected() {
         proof: base64::engine::general_purpose::STANDARD.encode(proof.to_bytes()),
         pubkey: base64::engine::general_purpose::STANDARD.encode(&my_pub_wire),
     };
-    sink_b.send(Message::Text(channel_msg.to_json().unwrap())).await.unwrap();
+    sink_b
+        .send(Message::Text(channel_msg.to_json().unwrap()))
+        .await
+        .unwrap();
 
     let resp = try_read_text(&mut stream_b).await;
     if let Some(resp) = resp {
@@ -416,9 +438,7 @@ async fn payload_too_large_rejected() {
     let mut config = test_config();
     config.max_payload_size = 64;
 
-    let (addr, _handle) = shenan_relay::server::run_test(config, cache)
-        .await
-        .unwrap();
+    let (addr, _handle) = shenan_relay::server::run_test(config, cache).await.unwrap();
     let url = format!("ws://{addr}");
 
     let window = channel::current_window();
@@ -453,10 +473,7 @@ async fn payload_too_large_rejected() {
 
     // Alice sends oversized payload
     let big_payload = vec![0u8; 128];
-    alice_sink
-        .send(Message::Binary(big_payload))
-        .await
-        .unwrap();
+    alice_sink.send(Message::Binary(big_payload)).await.unwrap();
 
     let resp = read_text(&mut alice_stream).await;
     match wire::Message::from_json(&resp).unwrap() {
@@ -508,7 +525,9 @@ async fn channel_before_auth_rejected() {
         proof: "ZmFrZQ==".into(),
         pubkey: "ZmFrZQ==".into(),
     };
-    sink.send(Message::Text(msg.to_json().unwrap())).await.unwrap();
+    sink.send(Message::Text(msg.to_json().unwrap()))
+        .await
+        .unwrap();
 
     let resp = read_text(&mut stream).await;
     match wire::Message::from_json(&resp).unwrap() {
@@ -535,7 +554,9 @@ async fn auth_before_hello_rejected() {
     let msg = wire::Message::Auth {
         signature: base64::engine::general_purpose::STANDARD.encode([0u8; 64]),
     };
-    sink.send(Message::Text(msg.to_json().unwrap())).await.unwrap();
+    sink.send(Message::Text(msg.to_json().unwrap()))
+        .await
+        .unwrap();
 
     let resp = read_text(&mut stream).await;
     match wire::Message::from_json(&resp).unwrap() {
@@ -563,13 +584,17 @@ async fn invalid_auth_signature_base64_rejected() {
         version: wire::PROTOCOL_VERSION,
         user: "alice".to_string(),
     };
-    sink.send(Message::Text(hello.to_json().unwrap())).await.unwrap();
+    sink.send(Message::Text(hello.to_json().unwrap()))
+        .await
+        .unwrap();
     let _ = read_text(&mut stream).await; // challenge
 
     let msg = wire::Message::Auth {
         signature: "%%%not-base64%%%".to_string(),
     };
-    sink.send(Message::Text(msg.to_json().unwrap())).await.unwrap();
+    sink.send(Message::Text(msg.to_json().unwrap()))
+        .await
+        .unwrap();
 
     let resp = read_text(&mut stream).await;
     match wire::Message::from_json(&resp).unwrap() {
@@ -603,7 +628,9 @@ async fn invalid_channel_fields_rejected() {
         pubkey: base64::engine::general_purpose::STANDARD
             .encode(ssh::ed25519_to_ssh_wire(&alice_pub.to_bytes())),
     };
-    sink.send(Message::Text(bad_token_msg.to_json().unwrap())).await.unwrap();
+    sink.send(Message::Text(bad_token_msg.to_json().unwrap()))
+        .await
+        .unwrap();
     let resp = read_text(&mut stream).await;
     match wire::Message::from_json(&resp).unwrap() {
         wire::Message::Error { code, message } => {
@@ -621,7 +648,9 @@ async fn invalid_channel_fields_rejected() {
         pubkey: base64::engine::general_purpose::STANDARD
             .encode(ssh::ed25519_to_ssh_wire(&alice_pub.to_bytes())),
     };
-    sink.send(Message::Text(bad_proof_msg.to_json().unwrap())).await.unwrap();
+    sink.send(Message::Text(bad_proof_msg.to_json().unwrap()))
+        .await
+        .unwrap();
     let resp = read_text(&mut stream).await;
     match wire::Message::from_json(&resp).unwrap() {
         wire::Message::Error { code, message } => {
@@ -638,7 +667,9 @@ async fn invalid_channel_fields_rejected() {
         proof: base64::engine::general_purpose::STANDARD.encode(proof.to_bytes()),
         pubkey: "%%%bad%%%".to_string(),
     };
-    sink.send(Message::Text(bad_pubkey_msg.to_json().unwrap())).await.unwrap();
+    sink.send(Message::Text(bad_pubkey_msg.to_json().unwrap()))
+        .await
+        .unwrap();
     let resp = read_text(&mut stream).await;
     match wire::Message::from_json(&resp).unwrap() {
         wire::Message::Error { code, message } => {
@@ -714,9 +745,7 @@ async fn rate_limit_enforced_per_ip() {
     let cache = test_cache(&[("alice", &alice_key)]);
     let mut config = test_config();
     config.rate_limit_auth = 1;
-    let (addr, _handle) = shenan_relay::server::run_test(config, cache)
-        .await
-        .unwrap();
+    let (addr, _handle) = shenan_relay::server::run_test(config, cache).await.unwrap();
     let url = format!("ws://{addr}");
 
     let (ws1, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
@@ -725,7 +754,10 @@ async fn rate_limit_enforced_per_ip() {
         version: wire::PROTOCOL_VERSION,
         user: "alice".to_string(),
     };
-    sink1.send(Message::Text(hello.to_json().unwrap())).await.unwrap();
+    sink1
+        .send(Message::Text(hello.to_json().unwrap()))
+        .await
+        .unwrap();
     let first = read_text(&mut stream1).await;
     assert!(matches!(
         wire::Message::from_json(&first).unwrap(),
@@ -734,7 +766,10 @@ async fn rate_limit_enforced_per_ip() {
 
     let (ws2, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
     let (mut sink2, mut stream2) = ws2.split();
-    sink2.send(Message::Text(hello.to_json().unwrap())).await.unwrap();
+    sink2
+        .send(Message::Text(hello.to_json().unwrap()))
+        .await
+        .unwrap();
     let second = read_text(&mut stream2).await;
     match wire::Message::from_json(&second).unwrap() {
         wire::Message::Error { code, .. } => assert_eq!(code, wire::error_codes::RATE_LIMITED),
@@ -752,9 +787,7 @@ async fn session_expiry_blocks_channel_join() {
     let cache = test_cache(&[("alice", &alice_key), ("bob", &bob_key)]);
     let mut config = test_config();
     config.session_expiry = Duration::from_millis(10);
-    let (addr, _handle) = shenan_relay::server::run_test(config, cache)
-        .await
-        .unwrap();
+    let (addr, _handle) = shenan_relay::server::run_test(config, cache).await.unwrap();
     let url = format!("ws://{addr}");
 
     let (mut sink, mut stream) = connect_and_auth(&url, &alice_key, "alice").await;
@@ -769,7 +802,9 @@ async fn session_expiry_blocks_channel_join() {
         pubkey: base64::engine::general_purpose::STANDARD
             .encode(ssh::ed25519_to_ssh_wire(&alice_pub.to_bytes())),
     };
-    sink.send(Message::Text(msg.to_json().unwrap())).await.unwrap();
+    sink.send(Message::Text(msg.to_json().unwrap()))
+        .await
+        .unwrap();
 
     let resp = read_text(&mut stream).await;
     match wire::Message::from_json(&resp).unwrap() {
@@ -806,10 +841,7 @@ async fn multi_key_auth_succeeds_with_any_key() {
     let bob_key_1 = SigningKey::generate(&mut OsRng);
     let bob_key_2 = SigningKey::generate(&mut OsRng);
 
-    let cache = test_cache_multi(&[
-        ("alice", &[&alice_key]),
-        ("bob", &[&bob_key_1, &bob_key_2]),
-    ]);
+    let cache = test_cache_multi(&[("alice", &[&alice_key]), ("bob", &[&bob_key_1, &bob_key_2])]);
     let (addr, _handle) = shenan_relay::server::run_test(test_config(), cache)
         .await
         .unwrap();
@@ -830,10 +862,7 @@ async fn multi_key_send_receive_cycle() {
     let alice_pub = alice_key.verifying_key();
     let bob_pub_2 = bob_key_2.verifying_key();
 
-    let cache = test_cache_multi(&[
-        ("alice", &[&alice_key]),
-        ("bob", &[&bob_key_1, &bob_key_2]),
-    ]);
+    let cache = test_cache_multi(&[("alice", &[&alice_key]), ("bob", &[&bob_key_1, &bob_key_2])]);
     let (addr, _handle) = shenan_relay::server::run_test(test_config(), cache)
         .await
         .unwrap();
@@ -856,10 +885,8 @@ async fn multi_key_send_receive_cycle() {
     let window = channel::current_window();
 
     // Connect both parties (bob uses key_2)
-    let (mut alice_sink, mut alice_stream) =
-        connect_and_auth(&url, &alice_key, "alice").await;
-    let (mut bob_sink, mut bob_stream) =
-        connect_and_auth(&url, &bob_key_2, "bob").await;
+    let (mut alice_sink, mut alice_stream) = connect_and_auth(&url, &alice_key, "alice").await;
+    let (mut bob_sink, mut bob_stream) = connect_and_auth(&url, &bob_key_2, "bob").await;
 
     // Alice joins channel (sender→recipient using bob's key_2)
     let alice_resp = send_channel_join(

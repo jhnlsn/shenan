@@ -25,8 +25,7 @@ pub async fn run(
         .ok_or_else(|| anyhow::anyhow!("--to must be in format github:<username>"))?;
 
     // Load local identity
-    let id = storage::load_identity()?
-        .context("not initialized — run `shenan init` first")?;
+    let id = storage::load_identity()?.context("not initialized — run `shenan init` first")?;
     let signing_key = identity::load_signing_key(&PathBuf::from(&id.ssh_key_path))?;
     let config = storage::load_config()?;
 
@@ -36,7 +35,9 @@ pub async fn run(
     } else if stdin || key_values.is_empty() {
         // Check if stdin has data
         if atty::is(atty::Stream::Stdin) && key_values.is_empty() {
-            anyhow::bail!("no secrets provided. Use KEY=value args, --from-file, or pipe via stdin");
+            anyhow::bail!(
+                "no secrets provided. Use KEY=value args, --from-file, or pipe via stdin"
+            );
         }
         if !key_values.is_empty() {
             parse_key_values(&key_values)?
@@ -101,6 +102,14 @@ pub async fn run(
     )
     .await?;
 
+    if recipient_verifying_keys.len() > 1 {
+        eprintln!(
+            "Matched recipient key {}/{}.",
+            result.key_index + 1,
+            recipient_verifying_keys.len()
+        );
+    }
+
     match result.result {
         crate::session::SessionResult::Delivered => {
             eprintln!("Delivered successfully.");
@@ -147,7 +156,10 @@ mod tests {
 
     #[test]
     fn parse_key_values_basic() {
-        let args = vec!["API_KEY=abc".to_string(), "DB_URL=postgres://db".to_string()];
+        let args = vec![
+            "API_KEY=abc".to_string(),
+            "DB_URL=postgres://db".to_string(),
+        ];
         let parsed = parse_key_values(&args).unwrap();
         assert_eq!(parsed["API_KEY"], "abc");
         assert_eq!(parsed["DB_URL"], "postgres://db");
