@@ -45,7 +45,7 @@ A conforming Shenan relay:
 
 These are not aspirational goals — they are verifiable architectural constraints. A conforming relay has no code path that stores, logs, or inspects payload content. Security guarantees are **structural**, not operational — they are enforced by what code exists, not by policy. An auditor can verify them by reading the source, not by trusting a document.
 
-**Caveat:** During authentication (§6), the relay necessarily learns the client's GitHub username and public key in order to verify identity. A conforming relay discards this information immediately after verification. The structural guarantee begins *after* authentication — from that point forward, the relay holds no identity information, only anonymous ephemeral IDs and bare public keys (during the brief channel admission window) with no username attached.
+**Caveat:** During authentication (§6), the relay necessarily learns the client's GitHub username and public key in order to verify identity. A conforming relay discards this information immediately after verification. The structural guarantee begins *after* authentication — from that point forward, the relay holds no identity information, only anonymous authenticated connections and bare public keys (during the brief channel admission window) with no username attached.
 
 ---
 
@@ -121,7 +121,7 @@ This endpoint returns one or more public keys in OpenSSH authorized_keys format 
 
 ### Key selection
 
-If a user has multiple keys, the CLI selects the Ed25519 key. If no Ed25519 key is found, the CLI MUST fail with a clear error.
+The POC requires exactly one Ed25519 key per GitHub account. If no Ed25519 key is found, or if multiple Ed25519 keys are found, the CLI MUST fail with a clear error. This ensures both parties deterministically agree on the same key for channel derivation (§7.2) without ambiguity. See §15 for future multi-key support.
 
 ### Local identity
 
@@ -137,14 +137,15 @@ Shenan has no accounts, no registration, no passwords, no email. Identity is ent
 
 ### 6.1 Overview
 
-Authentication establishes that a connecting client controls a GitHub account with at least one registered SSH public key. After authentication, the client's GitHub identity is shed and replaced with an ephemeral session identifier that has no link to the original identity.
+Authentication establishes that a connecting client controls a GitHub account with at least one registered SSH public key. After authentication, the client's GitHub identity is shed — the relay marks the WebSocket connection as authenticated but retains no link to the original identity.
 
 ### 6.2 Protocol
 
 ```
 Client                                   Relay
   |                                        |
-  |--- {"type":"hello","user":"alice"} --> |
+  |--- {"type":"hello","version":1,   --> |
+  |     "user":"alice"}                   |
   |                                        | fetch https://github.com/alice.keys
   |                                        | select a key for the challenge
   |<-- {"type":"challenge",                |
@@ -162,13 +163,13 @@ Client                                   Relay
 
 ### 6.3 Key fetching
 
-The relay fetches public keys from `https://github.com/{username}.keys`. The relay MUST validate the username against `^[a-zA-Z0-9\-]+$` (GitHub's username rules) before constructing the URL, to prevent SSRF via path traversal. If validation fails, the fetch fails, or the response contains no Ed25519 keys, the relay returns `{"type":"error","code":"auth_failed"}` and closes the connection.
+The relay fetches public keys from `https://github.com/{username}.keys`. The relay MUST validate the username against `^[a-zA-Z0-9\-]+$` (GitHub's username rules) before constructing the URL, to prevent SSRF via path traversal. If validation fails, the fetch fails, the response contains no Ed25519 keys, or the response contains more than one Ed25519 key, the relay returns `{"type":"error","code":"auth_failed"}` and closes the connection.
 
 ### 6.4 Challenge construction
 
 The nonce is 32 cryptographically random bytes encoded as lowercase hex. The challenge MUST be unique per connection attempt.
 
-The relay selects the user's Ed25519 key from the fetched key list and includes its fingerprint in the challenge message, allowing the client to select the correct private key.
+The relay uses the user's single Ed25519 key from the fetched key list and includes its fingerprint in the challenge message, allowing the client to select the correct private key.
 
 ### 6.5 Signature verification
 
@@ -250,7 +251,7 @@ The relay identifies the client by its WebSocket connection, not by a bearer tok
 1. Checks that the connection corresponds to an authenticated session
 2. Checks that no pending channel entry exists for this `channel_token`
 3. Verifies `channel_proof` is a valid signature over `SHA256(channel_token)` using the provided `pubkey`
-4. Stores: `{ channel_token -> { proof, pubkey_1, ephemeral_id, arrived_at } }`
+4. Stores: `{ channel_token -> { proof, pubkey_1, socket, arrived_at } }`
 
 **On second arrival**, the relay:
 
@@ -303,22 +304,28 @@ When a client presents a channel join (see §7.4), and no pending entry exists f
 
 When a second client presents the same `channel_token`:
 
-1. The relay verifies the proof and performs the complementary proof check as described in §7.4 (second arrival)
+1. The relay verifies the proof and performs the admission check as described in §7.4 (second arrival)
 2. If all checks pass: the relay opens a bidirectional pipe between the two sockets and MUST immediately discard all channel state — channel token, both proofs, both pubkeys
 3. If any check fails: the relay closes BOTH connections with `{"type":"error","code":"auth_failed"}` and MUST discard all channel state
 
 Closing both connections on failure is deliberate: if one proof is invalid, the first party may also be compromised or confused.
 
-The relay MUST NOT retain any state linking the two ephemeral IDs to each other after the pipe is established. The pipe state is `{ pipe_id -> { socket_a, socket_b } }` where `pipe_id` is a new random value with no link to either session or channel.
+The relay MUST NOT retain any state linking the two connections to each other after the pipe is established. The pipe state is `{ pipe_id -> { socket_a, socket_b } }` where `pipe_id` is a new random value with no link to either session or channel.
 
 ### 8.3 Piped transmission
 
 Once a pipe is established:
 
 1. The sender transmits the wire payload (§9.2) as a single WebSocket binary message. The relay forwards it as-is to the recipient. The recipient processes the first binary message received after `connected` as the complete wire payload
-2. The relay MUST NOT log message events, byte counts, or timing information
-3. When either socket closes, the relay closes the other socket
-4. The relay MUST immediately delete the pipe state
+2. After successful decryption, the recipient sends `{"type":"received"}` as a text message through the pipe. The relay forwards this as-is to the sender. The sender waits for this message before considering the delivery complete
+3. After sending or receiving the `received` message, both sides close their WebSocket connections cleanly (close code 1000)
+4. The relay MUST NOT log message events, byte counts, or timing information
+5. When either socket closes, the relay closes the other socket
+6. The relay MUST immediately delete the pipe state
+
+If the recipient fails to decrypt the payload (auth tag mismatch), it closes the connection without sending `received`. The sender interprets a connection close without a `received` message as delivery failure.
+
+**Timeout:** The sender SHOULD wait up to 30 seconds for the `received` message after transmitting the payload. If no `received` message arrives, the sender reports delivery as uncertain (the payload may have been received but the ACK lost).
 
 `max_payload_size` (default 1MB) limits the total bytes transferred per pipe. If exceeded, the relay closes both connections.
 
@@ -427,8 +434,10 @@ All control messages between client and relay are JSON objects, one per WebSocke
 
 `hello`: initiates authentication
 ```json
-{"type":"hello","user":"<github-username>"}
+{"type":"hello","version":1,"user":"<github-username>"}
 ```
+
+The `version` field is the protocol version. A relay MUST reject connections with an unsupported version with `{"type":"error","code":"unsupported_version"}`.
 
 `auth`: responds to challenge
 ```json
@@ -443,6 +452,11 @@ All control messages between client and relay are JSON objects, one per WebSocke
   "proof": "<base64-encoded-signature>",
   "pubkey": "<base64-encoded-ssh-public-key>"
 }
+```
+
+`received`: delivery confirmation from recipient (sent through pipe, forwarded by relay)
+```json
+{"type":"received"}
 ```
 
 ### 10.2 Relay → Client messages
@@ -480,6 +494,7 @@ All control messages between client and relay are JSON objects, one per WebSocke
 
 | Code | Meaning |
 |------|---------|
+| `unsupported_version` | Protocol version not supported by this relay |
 | `auth_failed` | Authentication failed or channel proof invalid |
 | `channel_expired` | No second party arrived within `admission_window` |
 | `rate_limited` | Too many attempts from this IP |
@@ -605,13 +620,13 @@ Parses into the payload JSON (§9.1):
 The POC assumes a trusted, conforming relay. Against such a relay, even with complete real-time memory access:
 
 **Can see:**
-- Some number of verified GitHub users are currently connected (as anonymous ephemeral IDs)
+- Some number of verified GitHub users are currently connected (as anonymous authenticated connections)
 - Some of those connections are paired on anonymous channels
 - Opaque encrypted bytes flowing through those channels
 - Approximate timing of transactions
 
 **Cannot determine:**
-- Which GitHub user corresponds to which ephemeral ID (shed after auth)
+- Which GitHub user corresponds to which connection (shed after auth)
 - Which GitHub user is talking to which
 - What relationship exists between any two parties
 - What the bytes contain
@@ -660,18 +675,22 @@ The current design uses X25519 for key agreement, which is vulnerable to a suffi
 
 Implementations SHOULD zero sensitive bytes (private key material, nonces, channel tokens) immediately after use. In Rust, use the `zeroize` crate with `Zeroizing<T>` wrappers.
 
-### 14.2 No-log enforcement
+### 14.2 One connection per operation
+
+Each `send` or `receive` operation uses a single WebSocket connection through the full lifecycle: authenticate → join channel → transmit/receive → close. Connections MUST NOT be reused across operations. This simplifies relay state management and ensures clean teardown.
+
+### 14.3 No-log enforcement
 
 A conforming relay MUST NOT log:
 - GitHub usernames presented during authentication
-- The association between ephemeral IDs and GitHub usernames
+- The association between authenticated connections and GitHub usernames
 - Channel tokens or proofs
 - That a pipe was established between any two parties
 - Payload content or byte counts
 
 It MAY log: connection errors, rate limit events (with IP only), and relay startup/shutdown events.
 
-### 14.3 State cleanup
+### 14.4 State cleanup
 
 The relay MUST clean up:
 - Expired pending channels (after `admission_window`)
@@ -702,9 +721,15 @@ Cleanup SHOULD run in a background task (e.g., `tokio::spawn`), not inline with 
 
 6. **Simultaneous online requirement** — Both parties must be online within the `admission_window` (default 5 minutes). This requires out-of-band coordination ("hey, run `shenan receive` now"). A future version may add a lightweight notification mechanism.
 
-7. **Additional key types** — Only Ed25519 is supported. RSA and ECDSA support may be added in a future version.
+7. **Single Ed25519 key requirement** — The POC requires exactly one Ed25519 key per GitHub account and fails if zero or multiple are found. A future version should support multiple Ed25519 keys via a deterministic selection rule (e.g., first Ed25519 key in the GitHub response) or key ID negotiation, so users with multiple keys can participate without restriction.
 
-8. **Post-quantum key exchange** — Hybrid X25519 + ML-KEM-768 for payload encryption (see §13.6).
+8. **Additional key types** — Only Ed25519 is supported. RSA and ECDSA support may be added in a future version.
+
+9. **Post-quantum key exchange** — Hybrid X25519 + ML-KEM-768 for payload encryption (see §13.6).
+
+10. **Delivery confirmation robustness** — The POC uses a simple `received` message as delivery confirmation (§8.3). This is best-effort: if the ACK is lost due to a network partition after the payload was received, the sender reports delivery as uncertain even though the recipient has the secrets. A future version may add a more robust delivery receipt mechanism (e.g., signed receipts, retry semantics).
+
+11. **Connection reuse** — The POC uses one WebSocket connection per operation (§14.2). A future version may support connection pooling or multiplexing for efficiency in high-throughput scenarios.
 
 ---
 
