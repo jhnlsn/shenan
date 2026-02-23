@@ -74,6 +74,16 @@ pub async fn run(
     )
     .await?;
 
+    let matched_key_index = result.key_index;
+
+    if sender_verifying_keys.len() > 1 {
+        eprintln!(
+            "Matched sender key {}/{}.",
+            matched_key_index + 1,
+            sender_verifying_keys.len()
+        );
+    }
+
     let wire_payload = match result.result {
         crate::session::SessionResult::Received(data) => data,
         _ => unreachable!(),
@@ -83,12 +93,15 @@ pub async fn run(
     let payload = shenan_proto::payload::decrypt(&wire_payload, &signing_key)
         .context("failed to decrypt payload — the sender may not have your correct public key")?;
 
-    // Verify sender fingerprint is in the known fingerprints list
-    if !sender_fingerprints.contains(&payload.sender_pubkey_fingerprint) {
+    // Verify sender fingerprint matches the exact key that won fan-out.
+    let expected_sender_fingerprint = &sender_fingerprints[matched_key_index];
+    if payload.sender_pubkey_fingerprint != *expected_sender_fingerprint {
         anyhow::bail!(
-            "sender fingerprint mismatch: got {}, expected one of: {}",
+            "sender fingerprint mismatch: got {}, expected {} (matched key {}/{})",
             payload.sender_pubkey_fingerprint,
-            sender_fingerprints.join(", ")
+            expected_sender_fingerprint,
+            matched_key_index + 1,
+            sender_fingerprints.len()
         );
     }
 

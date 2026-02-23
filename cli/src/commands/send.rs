@@ -101,6 +101,14 @@ pub async fn run(
     )
     .await?;
 
+    if recipient_verifying_keys.len() > 1 {
+        eprintln!(
+            "Matched recipient key {}/{}.",
+            result.key_index + 1,
+            recipient_verifying_keys.len()
+        );
+    }
+
     match result.result {
         crate::session::SessionResult::Delivered => {
             eprintln!("Delivered successfully.");
