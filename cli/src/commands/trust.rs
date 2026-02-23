@@ -11,7 +11,35 @@ fn parse_github_ref(s: &str) -> Result<String> {
     if username.is_empty() {
         anyhow::bail!("username cannot be empty");
     }
+    if !is_valid_github_username(username) {
+        anyhow::bail!("invalid github username: '{username}'");
+    }
     Ok(username.to_string())
+}
+
+fn is_valid_github_username(username: &str) -> bool {
+    // GitHub usernames are 1-39 chars, alphanumeric or single hyphens between alnum chars.
+    if username.is_empty() || username.len() > 39 {
+        return false;
+    }
+    if username.starts_with('-') || username.ends_with('-') {
+        return false;
+    }
+
+    let mut prev_hyphen = false;
+    for c in username.chars() {
+        if c.is_ascii_alphanumeric() {
+            prev_hyphen = false;
+            continue;
+        }
+        if c == '-' && !prev_hyphen {
+            prev_hyphen = true;
+            continue;
+        }
+        return false;
+    }
+
+    true
 }
 
 pub fn add(target: &str) -> Result<()> {
