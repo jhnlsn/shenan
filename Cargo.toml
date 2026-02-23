@@ -1,0 +1,48 @@
+[workspace]
+members = ["proto", "relay", "cli"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+thiserror = "2"
+anyhow = "1"
+base64 = "0.22"
+hex = "0.4"
+rand = "0.8"
+zeroize = { version = "1", features = ["derive"] }
+
+# Crypto
+ed25519-dalek = { version = "2", features = ["rand_core", "hazmat"] }
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+chacha20poly1305 = "0.10"
+hkdf = "0.12"
+sha2 = "0.10"
+curve25519-dalek = { version = "4", features = ["digest"] }
+
+# SSH
+ssh-key = { version = "0.6", features = ["ed25519"] }
+
+# WebSocket
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+
+# HTTP
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+
+# TLS
+tokio-rustls = "0.26"
+rustls = "0.23"
+rustls-pemfile = "2"
+
+# Misc
+dashmap = "6"
+clap = { version = "4", features = ["derive"] }
+dialoguer = "0.11"
+toml = "0.8"
+dirs = "5"
