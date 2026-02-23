@@ -117,12 +117,28 @@ fn parse_key_values(args: &[String]) -> Result<BTreeMap<String, String>> {
         let (key, value) = arg
             .split_once('=')
             .with_context(|| format!("invalid format: '{arg}' (expected KEY=value)"))?;
-        if key.is_empty() {
-            anyhow::bail!("invalid key in '{arg}' (key cannot be empty)");
+        if !is_valid_env_key(key) {
+            anyhow::bail!(
+                "invalid key '{}' in '{}' (must match [A-Za-z_][A-Za-z0-9_]*)",
+                key,
+                arg
+            );
         }
         map.insert(key.to_string(), value.to_string());
     }
     Ok(map)
+}
+
+fn is_valid_env_key(key: &str) -> bool {
+    if key.is_empty() {
+        return false;
+    }
+    let mut chars = key.chars();
+    let first = chars.next().unwrap();
+    if !first.is_ascii_alphabetic() && first != '_' {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 #[cfg(test)]
