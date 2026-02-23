@@ -1,0 +1,17 @@
+# Rust build artifacts
+/target/
+
+# Keep Cargo.lock for applications (do not ignore it)
+
+# Rustfmt backup files
+**/*.rs.bk
+
+# macOS
+.DS_Store
+
+# Editors/IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
