@@ -148,7 +148,12 @@ pub async fn handle_connection(
                     // ── Channel join ──
                     (AuthState::Authenticated, wire::Message::Channel { token, proof, pubkey }) => {
                         // Verify session is still valid
-                        if !state.sessions.contains_key(&conn_id) {
+                        let session_valid = state
+                            .sessions
+                            .get(&conn_id)
+                            .is_some_and(|session| session.expires_at > Instant::now());
+                        if !session_valid {
+                            state.sessions.remove(&conn_id);
                             let _ = send_error(&tx, wire::error_codes::AUTH_FAILED, "session expired");
                             break;
                         }

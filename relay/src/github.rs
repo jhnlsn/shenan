@@ -75,12 +75,30 @@ impl GitHubKeyCache {
     }
 }
 
-/// Validate GitHub username: `^[a-zA-Z0-9\-]+$`
+/// Validate GitHub username using GitHub constraints:
+/// 1-39 chars, alphanumeric or single hyphens between alnum chars.
 fn is_valid_github_username(username: &str) -> bool {
-    !username.is_empty()
-        && username
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+    if username.is_empty() || username.len() > 39 {
+        return false;
+    }
+    if username.starts_with('-') || username.ends_with('-') {
+        return false;
+    }
+
+    let mut prev_hyphen = false;
+    for c in username.chars() {
+        if c.is_ascii_alphanumeric() {
+            prev_hyphen = false;
+            continue;
+        }
+        if c == '-' && !prev_hyphen {
+            prev_hyphen = true;
+            continue;
+        }
+        return false;
+    }
+
+    true
 }
 
 /// Fetch keys from URL and parse all Ed25519 keys.
