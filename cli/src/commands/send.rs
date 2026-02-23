@@ -117,6 +117,9 @@ fn parse_key_values(args: &[String]) -> Result<BTreeMap<String, String>> {
         let (key, value) = arg
             .split_once('=')
             .with_context(|| format!("invalid format: '{arg}' (expected KEY=value)"))?;
+        if key.is_empty() {
+            anyhow::bail!("invalid key in '{arg}' (key cannot be empty)");
+        }
         map.insert(key.to_string(), value.to_string());
     }
     Ok(map)
