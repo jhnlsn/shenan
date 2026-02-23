@@ -125,7 +125,7 @@ where
         let my_pub_wire = ssh::ed25519_to_ssh_wire(&signing_key.verifying_key().to_bytes());
 
         let channel_msg = wire::Message::Channel {
-            token: hex::encode(&*token),
+            token: hex::encode(*token),
             proof: base64::engine::general_purpose::STANDARD.encode(proof.to_bytes()),
             pubkey: base64::engine::general_purpose::STANDARD.encode(&my_pub_wire),
         };

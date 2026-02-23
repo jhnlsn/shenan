@@ -1,7 +1,7 @@
 //! Per-connection state machine — handles the full lifecycle of a single WebSocket connection.
 
 use std::net::SocketAddr;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use base64::Engine;
 use ed25519_dalek::Signature;
@@ -96,7 +96,7 @@ pub async fn handle_connection(
                         // then discarded per §6.6
                         auth_state = AuthState::AwaitingAuth {
                             nonce_bytes,
-                            verifying_key,
+                            verifying_key: Box::new(verifying_key),
                         };
                     }
 
@@ -189,7 +189,7 @@ pub async fn handle_connection(
                         };
 
                         // Verify channel proof
-                        if let Err(_) = admission::verify_channel_proof(&pubkey_32, &token_bytes, &proof_bytes) {
+                        if admission::verify_channel_proof(&pubkey_32, &token_bytes, &proof_bytes).is_err() {
                             let _ = send_error(&tx, wire::error_codes::AUTH_FAILED, "invalid channel proof");
                             break;
                         }
@@ -197,7 +197,7 @@ pub async fn handle_connection(
                         // Check for existing pending channel
                         if let Some((_, pending)) = state.pending_channels.remove(&token) {
                             // Second arrival — admission check
-                            if let Err(_) = admission::admission_check(&pending.pubkey, &pubkey_bytes_vec) {
+                            if admission::admission_check(&pending.pubkey, &pubkey_bytes_vec).is_err() {
                                 // Same pubkey — drop both
                                 let _ = send_error(&tx, wire::error_codes::AUTH_FAILED, None);
                                 let _ = send_error(&pending.sender, wire::error_codes::AUTH_FAILED, None);
@@ -212,6 +212,10 @@ pub async fn handle_connection(
                             };
                             state.active_pipes.insert(pipe_id, pipe);
 
+                            // Record pipe assignments so both handlers can discover their pipe
+                            state.pipe_assignments.insert(pending.conn_id, (pipe_id, true));
+                            state.pipe_assignments.insert(conn_id, (pipe_id, false));
+
                             // Remove sessions — they're now in the pipe
                             state.sessions.remove(&pending.conn_id);
                             state.sessions.remove(&conn_id);
@@ -221,12 +225,8 @@ pub async fn handle_connection(
                             let _ = pending.sender.send(Message::Text(connected.clone()));
                             let _ = tx.send(Message::Text(connected));
 
-                            // Track pipe info: pending is side_a, we are side_b
+                            // Track pipe info for this (second) handler
                             pipe_info = Some((pipe_id, false));
-
-                            // The first party's connection handler also needs to know
-                            // about the pipe, but since we're managing it here via
-                            // forwarding, this side handles both directions.
                         } else {
                             // First arrival
                             let pending = crate::state::PendingChannel {
@@ -247,6 +247,12 @@ pub async fn handle_connection(
 
                     // ── Received (forwarded through pipe) ──
                     (_, wire::Message::Received) => {
+                        // Lazily discover pipe assignment if not yet known
+                        if pipe_info.is_none() {
+                            if let Some(assignment) = state.pipe_assignments.get(&conn_id) {
+                                pipe_info = Some(*assignment);
+                            }
+                        }
                         if let Some((pipe_id, is_a)) = &pipe_info {
                             if let Some(pipe) = state.active_pipes.get(pipe_id) {
                                 let target = if *is_a { &pipe.sender_b } else { &pipe.sender_a };
@@ -264,6 +270,12 @@ pub async fn handle_connection(
 
             // Binary messages — forward through pipe
             Message::Binary(data) => {
+                // Lazily discover pipe assignment if not yet known
+                if pipe_info.is_none() {
+                    if let Some(assignment) = state.pipe_assignments.get(&conn_id) {
+                        pipe_info = Some(*assignment);
+                    }
+                }
                 if let Some((pipe_id, is_a)) = &pipe_info {
                     // Check payload size
                     if data.len() > state.config.max_payload_size {
@@ -288,13 +300,19 @@ pub async fn handle_connection(
         }
     }
 
+    // Allow pending messages to flush before cleanup
+    tokio::task::yield_now().await;
+
     // Cleanup on disconnect
     state.sessions.remove(&conn_id);
+    state.pipe_assignments.remove(&conn_id);
     if let Some((pipe_id, _)) = pipe_info {
         crate::pipe::close_pipe(&state, pipe_id);
     }
 
-    send_task.abort();
+    // Drop the sender to signal send_task to stop, then wait briefly for it
+    drop(tx);
+    let _ = tokio::time::timeout(Duration::from_millis(100), send_task).await;
 }
 
 fn send_error(tx: &WsSender, code: &str, message: impl Into<Option<&'static str>>) -> Result<(), ()> {

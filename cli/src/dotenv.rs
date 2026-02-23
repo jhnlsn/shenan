@@ -122,13 +122,12 @@ fn is_valid_key(key: &str) -> bool {
 }
 
 fn strip_quotes(value: &str) -> &str {
-    if value.len() >= 2 {
-        if (value.starts_with('"') && value.ends_with('"'))
-            || (value.starts_with('\'') && value.ends_with('\''))
+    if value.len() >= 2
+        && ((value.starts_with('"') && value.ends_with('"'))
+            || (value.starts_with('\'') && value.ends_with('\'')))
         {
             return &value[1..value.len() - 1];
         }
-    }
     value
 }
 

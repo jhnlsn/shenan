@@ -57,6 +57,17 @@ impl GitHubKeyCache {
         result
     }
 
+    /// Pre-insert a key into the cache (for testing without GitHub API).
+    pub fn insert(&self, username: &str, key: SshEd25519PubKey) {
+        self.cache.insert(
+            username.to_string(),
+            CacheEntry {
+                result: Ok(key),
+                fetched_at: Instant::now(),
+            },
+        );
+    }
+
     /// Remove expired entries.
     #[allow(dead_code)]
     pub fn sweep(&self) {

@@ -29,7 +29,7 @@ pub fn discover_ed25519_keys() -> Result<Vec<SshKeyFile>> {
         let path = entry.path();
 
         // Skip non-files and public keys
-        if !path.is_file() || path.extension().map_or(false, |e| e == "pub") {
+        if !path.is_file() || path.extension().is_some_and(|e| e == "pub") {
             continue;
         }
 

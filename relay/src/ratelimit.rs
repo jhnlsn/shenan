@@ -13,7 +13,7 @@ pub fn check_and_record(state: &SharedState, addr: SocketAddr) -> bool {
     let now = Instant::now();
     let max = state.config.rate_limit_auth;
 
-    let mut entry = state.rate_limits.entry(ip_addr).or_insert_with(Vec::new);
+    let mut entry = state.rate_limits.entry(ip_addr).or_default();
     // Prune old entries outside the window
     entry.retain(|t| now.duration_since(*t) < WINDOW);
 

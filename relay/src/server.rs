@@ -80,6 +80,38 @@ pub async fn run(config: RelayConfig) -> Result<(), Box<dyn std::error::Error>> 
     }
 }
 
+/// Start the relay on a random port for testing. Returns the bound address.
+///
+/// The relay runs in a background task. Cancel it by dropping the returned `JoinHandle`.
+pub async fn run_test(
+    config: RelayConfig,
+    github_cache: Arc<GitHubKeyCache>,
+) -> Result<(std::net::SocketAddr, tokio::task::JoinHandle<()>), Box<dyn std::error::Error>> {
+    let state: SharedState = Arc::new(RelayState::new(config));
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+
+    let handle = tokio::spawn(async move {
+        loop {
+            let (tcp_stream, peer_addr) = match listener.accept().await {
+                Ok(v) => v,
+                Err(_) => break,
+            };
+
+            let state = state.clone();
+            let github_cache = github_cache.clone();
+
+            tokio::spawn(async move {
+                if let Ok(ws) = accept_async(tcp_stream).await {
+                    connection::handle_connection(ws, peer_addr, state, github_cache).await;
+                }
+            });
+        }
+    });
+
+    Ok((addr, handle))
+}
+
 fn load_certs(
     path: &std::path::Path,
 ) -> Result<Vec<rustls::pki_types::CertificateDer<'static>>, Box<dyn std::error::Error>> {

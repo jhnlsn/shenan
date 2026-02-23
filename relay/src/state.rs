@@ -41,6 +41,9 @@ pub struct ActivePipe {
     pub sender_b: WsSender,
 }
 
+/// Pipe assignment for a connection: (pipe_id, is_side_a).
+pub type PipeAssignment = (u64, bool);
+
 /// The complete relay state. This is the *only* state the relay holds.
 pub struct RelayState {
     /// Authenticated connections: conn_id → session
@@ -49,6 +52,8 @@ pub struct RelayState {
     pub pending_channels: DashMap<String, PendingChannel>,
     /// Active pipes: pipe_id → pipe
     pub active_pipes: DashMap<u64, ActivePipe>,
+    /// Pipe assignments: conn_id → (pipe_id, is_side_a)
+    pub pipe_assignments: DashMap<ConnId, PipeAssignment>,
     /// Rate limit tracking: IP → list of attempt timestamps
     pub rate_limits: DashMap<SocketAddr, Vec<Instant>>,
     /// Configuration
@@ -63,6 +68,7 @@ impl RelayState {
             sessions: DashMap::new(),
             pending_channels: DashMap::new(),
             active_pipes: DashMap::new(),
+            pipe_assignments: DashMap::new(),
             rate_limits: DashMap::new(),
             config,
             conn_counter: std::sync::atomic::AtomicU64::new(1),

@@ -10,26 +10,30 @@ Thanks for your interest in contributing. Shenan is a small, focused project and
 git clone https://github.com/jhnlsn/shenan
 cd shenan
 
-# relay
-cd relay && go build ./...
+# Build everything
+cargo build --workspace
 
-# cli
-cd cli && go build ./...
+# Run tests
+cargo test --workspace
+
+# Lint
+cargo clippy --all-targets
 ```
 
-Go 1.22+ is required.
+Rust 1.70+ is required.
 
 ---
 
 ## Project structure
 
 ```
+proto/        shared wire types and cryptography (MIT)
 relay/        relay server (AGPL v3)
 cli/          command-line client (MIT)
-spec/         protocol specifications (CC0)
+SPEC.md       protocol specification (CC0)
 ```
 
-The relay and CLI are deliberately separate modules with separate licenses. Keep them separate. Do not introduce dependencies from `relay/` into `cli/` or vice versa.
+The three crates form a Cargo workspace. `proto` is a shared dependency of both `relay` and `cli`. The relay and CLI are deliberately separate crates with separate licenses. Do not introduce dependencies from `relay/` into `cli/` or vice versa — they share only `proto`.
 
 ---
 
@@ -53,17 +57,17 @@ Email `security@shenan.dev` with a description of the issue. We will acknowledge
 
 ## Code style
 
-Follow standard Go conventions (`gofmt`, `golint`, `go vet`). We use `golangci-lint` in CI. Run it locally before submitting:
+Follow standard Rust conventions. We use `clippy` for linting. Run it locally before submitting:
 
 ```bash
-golangci-lint run ./...
+cargo clippy --all-targets
 ```
 
 ---
 
 ## Spec changes
 
-The protocol specification in `spec/` is separately versioned. Changes to the spec require:
+The protocol specification in `SPEC.md` is separately versioned. Changes to the spec require:
 
 1. An issue describing the proposed change and its rationale
 2. Discussion and rough consensus before a PR is opened
@@ -75,4 +79,4 @@ Spec changes that break compatibility with the current protocol require a versio
 
 ## License
 
-By contributing, you agree that your contributions to `relay/` will be licensed under AGPL v3, contributions to `cli/` under MIT, and contributions to `spec/` under CC0.
+By contributing, you agree that your contributions to `relay/` will be licensed under AGPL v3, contributions to `cli/` and `proto/` under MIT, and contributions to `SPEC.md` under CC0.

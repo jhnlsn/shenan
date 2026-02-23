@@ -11,7 +11,7 @@ pub enum AuthState {
     /// Challenge sent, waiting for `auth` response.
     AwaitingAuth {
         nonce_bytes: [u8; 32],
-        verifying_key: VerifyingKey,
+        verifying_key: Box<VerifyingKey>,
     },
     /// Successfully authenticated.
     Authenticated,

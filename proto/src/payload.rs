@@ -128,7 +128,6 @@ mod tests {
 
     #[test]
     fn encrypt_decrypt_round_trip() {
-        let sender = SigningKey::generate(&mut OsRng);
         let recipient = SigningKey::generate(&mut OsRng);
 
         let mut secrets = BTreeMap::new();
@@ -146,7 +145,6 @@ mod tests {
 
     #[test]
     fn wrong_recipient_fails() {
-        let sender = SigningKey::generate(&mut OsRng);
         let recipient = SigningKey::generate(&mut OsRng);
         let wrong = SigningKey::generate(&mut OsRng);
 
