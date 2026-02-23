@@ -48,10 +48,7 @@ impl Payload {
 ///
 /// Generates a fresh ephemeral X25519 keypair for forward secrecy.
 /// Returns the wire payload: `ephemeral_pub(32) || nonce(12) || ciphertext`.
-pub fn encrypt(
-    payload: &Payload,
-    recipient_pubkey: &VerifyingKey,
-) -> Result<Vec<u8>, ProtoError> {
+pub fn encrypt(payload: &Payload, recipient_pubkey: &VerifyingKey) -> Result<Vec<u8>, ProtoError> {
     let plaintext = serde_json::to_vec(payload)?;
 
     // Generate ephemeral X25519 keypair
@@ -60,7 +57,8 @@ pub fn encrypt(
 
     // DH with recipient's Ed25519 public key (converted to X25519)
     let recipient_x_pub = crypto::x25519::ed25519_pub_to_x25519(recipient_pubkey);
-    let shared_secret = Zeroizing::new(ephemeral_secret.diffie_hellman(&recipient_x_pub).to_bytes());
+    let shared_secret =
+        Zeroizing::new(ephemeral_secret.diffie_hellman(&recipient_x_pub).to_bytes());
 
     // Derive encryption key
     let encryption_key = crypto::kdf::derive_key(&*shared_secret, None, PAYLOAD_HKDF_INFO);
@@ -97,9 +95,7 @@ pub fn decrypt(
     }
 
     // Parse wire layout
-    let ephemeral_pub_bytes: [u8; 32] = wire_payload[..EPHEMERAL_PUB_LEN]
-        .try_into()
-        .unwrap();
+    let ephemeral_pub_bytes: [u8; 32] = wire_payload[..EPHEMERAL_PUB_LEN].try_into().unwrap();
     let nonce: [u8; 12] = wire_payload[EPHEMERAL_PUB_LEN..HEADER_LEN]
         .try_into()
         .unwrap();

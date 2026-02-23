@@ -47,8 +47,8 @@ fn try_read_ed25519_fingerprint(path: &PathBuf) -> Result<String> {
     let contents = std::fs::read_to_string(path)?;
 
     // Use ssh-key crate to parse
-    let private_key = ssh_key::PrivateKey::from_openssh(&contents)
-        .context("not a valid OpenSSH private key")?;
+    let private_key =
+        ssh_key::PrivateKey::from_openssh(&contents).context("not a valid OpenSSH private key")?;
 
     // Check if it's Ed25519
     if !matches!(private_key.algorithm(), ssh_key::Algorithm::Ed25519) {
@@ -64,8 +64,8 @@ fn try_read_ed25519_fingerprint(path: &PathBuf) -> Result<String> {
 /// Load an Ed25519 signing key from an SSH private key file.
 pub fn load_signing_key(path: &PathBuf) -> Result<SigningKey> {
     let contents = std::fs::read_to_string(path)?;
-    let private_key = ssh_key::PrivateKey::from_openssh(&contents)
-        .context("failed to parse SSH private key")?;
+    let private_key =
+        ssh_key::PrivateKey::from_openssh(&contents).context("failed to parse SSH private key")?;
 
     match private_key.key_data() {
         ssh_key::private::KeypairData::Ed25519(kp) => {

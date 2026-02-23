@@ -36,10 +36,7 @@ pub fn ed25519_priv_to_x25519(signing_key: &SigningKey) -> Zeroizing<X25519Stati
 }
 
 /// Perform X25519 Diffie-Hellman key agreement.
-pub fn dh(
-    my_private: &X25519StaticSecret,
-    their_public: &X25519PublicKey,
-) -> Zeroizing<[u8; 32]> {
+pub fn dh(my_private: &X25519StaticSecret, their_public: &X25519PublicKey) -> Zeroizing<[u8; 32]> {
     let shared = my_private.diffie_hellman(their_public);
     Zeroizing::new(shared.to_bytes())
 }

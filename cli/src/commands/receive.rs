@@ -22,8 +22,7 @@ pub async fn run(
         .ok_or_else(|| anyhow::anyhow!("--from must be in format github:<username>"))?;
 
     // Load local identity
-    let id = storage::load_identity()?
-        .context("not initialized — run `shenan init` first")?;
+    let id = storage::load_identity()?.context("not initialized — run `shenan init` first")?;
     let signing_key = identity::load_signing_key(&PathBuf::from(&id.ssh_key_path))?;
     let config = storage::load_config()?;
 
@@ -108,13 +107,21 @@ pub async fn run(
     // Output
     if let Some(out_path) = out {
         dotenv::write_dotenv_file(&out_path, &payload.secrets, merge)?;
-        eprintln!("Wrote {} secret(s) to {}", payload.secrets.len(), out_path.display());
+        eprintln!(
+            "Wrote {} secret(s) to {}",
+            payload.secrets.len(),
+            out_path.display()
+        );
     } else {
         // Print to stdout
         print!("{}", dotenv::format_dotenv(&payload.secrets));
     }
 
-    eprintln!("Received {} secret(s) from {}", payload.secrets.len(), from_username);
+    eprintln!(
+        "Received {} secret(s) from {}",
+        payload.secrets.len(),
+        from_username
+    );
 
     Ok(())
 }

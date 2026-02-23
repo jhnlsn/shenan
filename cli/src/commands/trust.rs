@@ -1,7 +1,7 @@
 //! `shenan trust add/remove/list` — trusted senders management.
 
-use anyhow::Result;
 use crate::storage::{self, TrustedSender};
+use anyhow::Result;
 
 /// Parse "github:<username>" format.
 fn parse_github_ref(s: &str) -> Result<String> {
@@ -51,7 +51,9 @@ pub fn add(target: &str) -> Result<()> {
         return Ok(());
     }
 
-    ts.senders.push(TrustedSender { github: username.clone() });
+    ts.senders.push(TrustedSender {
+        github: username.clone(),
+    });
     storage::save_trusted_senders(&ts)?;
     eprintln!("Added {username} to trusted senders");
     Ok(())

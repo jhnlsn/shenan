@@ -18,7 +18,9 @@ use crate::ratelimit;
 use crate::state::*;
 
 pub async fn handle_connection(
-    ws_stream: tokio_tungstenite::WebSocketStream<impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static>,
+    ws_stream: tokio_tungstenite::WebSocketStream<
+        impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+    >,
     peer_addr: SocketAddr,
     state: SharedState,
     github_cache: std::sync::Arc<GitHubKeyCache>,
@@ -56,13 +58,21 @@ pub async fn handle_connection(
                     // ── Hello ──
                     (AuthState::AwaitingHello, wire::Message::Hello { version, user }) => {
                         if version != wire::PROTOCOL_VERSION {
-                            let _ = send_error(&tx, wire::error_codes::UNSUPPORTED_VERSION, "unsupported protocol version");
+                            let _ = send_error(
+                                &tx,
+                                wire::error_codes::UNSUPPORTED_VERSION,
+                                "unsupported protocol version",
+                            );
                             break;
                         }
 
                         // Rate limit check
                         if !ratelimit::check_and_record(&state, peer_addr) {
-                            let _ = send_error(&tx, wire::error_codes::RATE_LIMITED, "too many attempts");
+                            let _ = send_error(
+                                &tx,
+                                wire::error_codes::RATE_LIMITED,
+                                "too many attempts",
+                            );
                             break;
                         }
 
@@ -109,14 +119,21 @@ pub async fn handle_connection(
                     }
 
                     // ── Auth ──
-                    (AuthState::AwaitingAuth { nonce_bytes, verifying_keys }, wire::Message::Auth { signature }) => {
-                        let sig_bytes = match base64::engine::general_purpose::STANDARD.decode(&signature) {
-                            Ok(b) => b,
-                            Err(_) => {
-                                let _ = send_error(&tx, wire::error_codes::AUTH_FAILED, None);
-                                break;
-                            }
-                        };
+                    (
+                        AuthState::AwaitingAuth {
+                            nonce_bytes,
+                            verifying_keys,
+                        },
+                        wire::Message::Auth { signature },
+                    ) => {
+                        let sig_bytes =
+                            match base64::engine::general_purpose::STANDARD.decode(&signature) {
+                                Ok(b) => b,
+                                Err(_) => {
+                                    let _ = send_error(&tx, wire::error_codes::AUTH_FAILED, None);
+                                    break;
+                                }
+                            };
 
                         let sig = match Signature::from_slice(&sig_bytes) {
                             Ok(s) => s,
@@ -146,7 +163,14 @@ pub async fn handle_connection(
                     }
 
                     // ── Channel join ──
-                    (AuthState::Authenticated, wire::Message::Channel { token, proof, pubkey }) => {
+                    (
+                        AuthState::Authenticated,
+                        wire::Message::Channel {
+                            token,
+                            proof,
+                            pubkey,
+                        },
+                    ) => {
                         // Verify session is still valid
                         let session_valid = state
                             .sessions
@@ -154,66 +178,95 @@ pub async fn handle_connection(
                             .is_some_and(|session| session.expires_at > Instant::now());
                         if !session_valid {
                             state.sessions.remove(&conn_id);
-                            let _ = send_error(&tx, wire::error_codes::AUTH_FAILED, "session expired");
+                            let _ =
+                                send_error(&tx, wire::error_codes::AUTH_FAILED, "session expired");
                             break;
                         }
 
-                        let token_bytes: [u8; 32] = match hex::decode(&token)
-                            .ok()
-                            .and_then(|b| b.try_into().ok())
-                        {
-                            Some(t) => t,
-                            None => {
-                                let _ = send_error(&tx, wire::error_codes::AUTH_FAILED, "invalid token");
-                                break;
-                            }
-                        };
+                        let token_bytes: [u8; 32] =
+                            match hex::decode(&token).ok().and_then(|b| b.try_into().ok()) {
+                                Some(t) => t,
+                                None => {
+                                    let _ = send_error(
+                                        &tx,
+                                        wire::error_codes::AUTH_FAILED,
+                                        "invalid token",
+                                    );
+                                    break;
+                                }
+                            };
 
-                        let proof_bytes = match base64::engine::general_purpose::STANDARD.decode(&proof) {
-                            Ok(b) => b,
-                            Err(_) => {
-                                let _ = send_error(&tx, wire::error_codes::AUTH_FAILED, "invalid proof");
-                                break;
-                            }
-                        };
+                        let proof_bytes =
+                            match base64::engine::general_purpose::STANDARD.decode(&proof) {
+                                Ok(b) => b,
+                                Err(_) => {
+                                    let _ = send_error(
+                                        &tx,
+                                        wire::error_codes::AUTH_FAILED,
+                                        "invalid proof",
+                                    );
+                                    break;
+                                }
+                            };
 
-                        let pubkey_bytes_vec = match base64::engine::general_purpose::STANDARD.decode(&pubkey) {
-                            Ok(b) => b,
-                            Err(_) => {
-                                let _ = send_error(&tx, wire::error_codes::AUTH_FAILED, "invalid pubkey");
-                                break;
-                            }
-                        };
+                        let pubkey_bytes_vec =
+                            match base64::engine::general_purpose::STANDARD.decode(&pubkey) {
+                                Ok(b) => b,
+                                Err(_) => {
+                                    let _ = send_error(
+                                        &tx,
+                                        wire::error_codes::AUTH_FAILED,
+                                        "invalid pubkey",
+                                    );
+                                    break;
+                                }
+                            };
 
                         // Extract raw 32-byte Ed25519 key from pubkey (which may be SSH wire format or raw)
                         let pubkey_32: [u8; 32] = if pubkey_bytes_vec.len() == 32 {
                             pubkey_bytes_vec.as_slice().try_into().unwrap()
                         } else {
                             // Try parsing as SSH wire format
-                            match shenan_proto::ssh::parse_ed25519_keys_required(
-                                &format!("ssh-ed25519 {pubkey}")
-                            ) {
+                            match shenan_proto::ssh::parse_ed25519_keys_required(&format!(
+                                "ssh-ed25519 {pubkey}"
+                            )) {
                                 Ok(keys) => keys[0].key_bytes,
                                 Err(_) => {
-                                    let _ = send_error(&tx, wire::error_codes::AUTH_FAILED, "invalid pubkey format");
+                                    let _ = send_error(
+                                        &tx,
+                                        wire::error_codes::AUTH_FAILED,
+                                        "invalid pubkey format",
+                                    );
                                     break;
                                 }
                             }
                         };
 
                         // Verify channel proof
-                        if admission::verify_channel_proof(&pubkey_32, &token_bytes, &proof_bytes).is_err() {
-                            let _ = send_error(&tx, wire::error_codes::AUTH_FAILED, "invalid channel proof");
+                        if admission::verify_channel_proof(&pubkey_32, &token_bytes, &proof_bytes)
+                            .is_err()
+                        {
+                            let _ = send_error(
+                                &tx,
+                                wire::error_codes::AUTH_FAILED,
+                                "invalid channel proof",
+                            );
                             break;
                         }
 
                         // Check for existing pending channel
                         if let Some((_, pending)) = state.pending_channels.remove(&token) {
                             // Second arrival — admission check
-                            if admission::admission_check(&pending.pubkey, &pubkey_bytes_vec).is_err() {
+                            if admission::admission_check(&pending.pubkey, &pubkey_bytes_vec)
+                                .is_err()
+                            {
                                 // Same pubkey — drop both
                                 let _ = send_error(&tx, wire::error_codes::AUTH_FAILED, None);
-                                let _ = send_error(&pending.sender, wire::error_codes::AUTH_FAILED, None);
+                                let _ = send_error(
+                                    &pending.sender,
+                                    wire::error_codes::AUTH_FAILED,
+                                    None,
+                                );
                                 break;
                             }
 
@@ -226,7 +279,9 @@ pub async fn handle_connection(
                             state.active_pipes.insert(pipe_id, pipe);
 
                             // Record pipe assignments so both handlers can discover their pipe
-                            state.pipe_assignments.insert(pending.conn_id, (pipe_id, true));
+                            state
+                                .pipe_assignments
+                                .insert(pending.conn_id, (pipe_id, true));
                             state.pipe_assignments.insert(conn_id, (pipe_id, false));
 
                             // Remove sessions — they're now in the pipe
@@ -268,14 +323,19 @@ pub async fn handle_connection(
                         }
                         if let Some((pipe_id, is_a)) = &pipe_info {
                             if let Some(pipe) = state.active_pipes.get(pipe_id) {
-                                let target = if *is_a { &pipe.sender_b } else { &pipe.sender_a };
+                                let target = if *is_a {
+                                    &pipe.sender_b
+                                } else {
+                                    &pipe.sender_a
+                                };
                                 let _ = target.send(Message::Text(text.to_string()));
                             }
                         }
                     }
 
                     _ => {
-                        let _ = send_error(&tx, wire::error_codes::AUTH_FAILED, "unexpected message");
+                        let _ =
+                            send_error(&tx, wire::error_codes::AUTH_FAILED, "unexpected message");
                         break;
                     }
                 }
@@ -297,7 +357,11 @@ pub async fn handle_connection(
                         break;
                     }
                     if let Some(pipe) = state.active_pipes.get(pipe_id) {
-                        let target = if *is_a { &pipe.sender_b } else { &pipe.sender_a };
+                        let target = if *is_a {
+                            &pipe.sender_b
+                        } else {
+                            &pipe.sender_a
+                        };
                         if target.send(Message::Binary(data)).is_err() {
                             crate::pipe::close_pipe(&state, *pipe_id);
                             break;
@@ -328,10 +392,15 @@ pub async fn handle_connection(
     let _ = tokio::time::timeout(Duration::from_millis(100), send_task).await;
 }
 
-fn send_error(tx: &WsSender, code: &str, message: impl Into<Option<&'static str>>) -> Result<(), ()> {
+fn send_error(
+    tx: &WsSender,
+    code: &str,
+    message: impl Into<Option<&'static str>>,
+) -> Result<(), ()> {
     let msg = wire::Message::Error {
         code: code.into(),
         message: message.into().map(String::from),
     };
-    tx.send(Message::Text(msg.to_json().unwrap())).map_err(|_| ())
+    tx.send(Message::Text(msg.to_json().unwrap()))
+        .map_err(|_| ())
 }

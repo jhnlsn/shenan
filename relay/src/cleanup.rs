@@ -18,15 +18,13 @@ fn sweep(state: &SharedState) {
     let now = Instant::now();
 
     // Expired authenticated sessions
-    state.sessions.retain(|_, session| {
-        session.expires_at > now
-    });
+    state.sessions.retain(|_, session| session.expires_at > now);
 
     // Expired pending channels
     let admission_window = state.config.admission_window;
-    state.pending_channels.retain(|_, pending| {
-        now.duration_since(pending.arrived_at) < admission_window
-    });
+    state
+        .pending_channels
+        .retain(|_, pending| now.duration_since(pending.arrived_at) < admission_window);
 
     // Stale rate limit entries (older than 2 minutes)
     let rl_window = std::time::Duration::from_secs(120);

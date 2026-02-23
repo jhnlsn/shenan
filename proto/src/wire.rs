@@ -148,19 +148,14 @@ pub enum ErrorMsgType {
 #[serde(tag = "type")]
 pub enum Message {
     #[serde(rename = "hello")]
-    Hello {
-        version: u32,
-        user: String,
-    },
+    Hello { version: u32, user: String },
     #[serde(rename = "challenge")]
     Challenge {
         nonce: String,
         pubkey_fingerprints: Vec<String>,
     },
     #[serde(rename = "auth")]
-    Auth {
-        signature: String,
-    },
+    Auth { signature: String },
     #[serde(rename = "authenticated")]
     Authenticated,
     #[serde(rename = "channel")]
@@ -170,9 +165,7 @@ pub enum Message {
         pubkey: String,
     },
     #[serde(rename = "waiting")]
-    Waiting {
-        expires_in_seconds: u64,
-    },
+    Waiting { expires_in_seconds: u64 },
     #[serde(rename = "connected")]
     Connected,
     #[serde(rename = "received")]
@@ -288,7 +281,11 @@ mod tests {
         let json = msg.to_json().unwrap();
         let parsed = Message::from_json(&json).unwrap();
         match parsed {
-            Message::Channel { token, proof, pubkey } => {
+            Message::Channel {
+                token,
+                proof,
+                pubkey,
+            } => {
                 assert_eq!(token, "a".repeat(64));
                 assert_eq!(proof, "Zm9v");
                 assert_eq!(pubkey, "YmFy");
