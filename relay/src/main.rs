@@ -4,6 +4,10 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() {
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("install rustls CryptoProvider");
+
     let args = RelayArgs::parse();
     let config = RelayConfig::from(args);
 
