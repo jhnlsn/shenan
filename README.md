@@ -148,9 +148,11 @@ An attacker **cannot** determine who is talking to whom, what relationship exist
 ## Getting started
 
 ```bash
-# Install
-brew install shenan        # macOS
-cargo install shenan  # from source
+# Install (macOS and Linux)
+curl -fsSL https://raw.githubusercontent.com/jhnlsn/shenan/main/install.sh | sh
+
+# Or from source
+cargo install shenan
 
 # Initialize — discover your local SSH keys, select identity
 shenan init

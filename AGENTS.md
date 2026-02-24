@@ -54,6 +54,10 @@ State machine: `AwaitingHello` → `AwaitingAuth` → `Authenticated` → piped.
 - **Direction string is always `"s2r"`**: Both sender and receiver use the same direction in channel token derivation to produce identical tokens.
 - **Session = socket, not token**: The relay identifies sessions by WebSocket connection, not bearer tokens (SPEC §6.6).
 
+## Git Commits
+
+Do not add agent attribution lines (e.g. `Co-Authored-By:`, `Generated-By:`, or similar trailers) to commit messages. Commits should appear as authored solely by the human developer.
+
 ## License Structure
 
 Contributions to `relay/` are AGPL-3.0, `cli/` and `proto/` are MIT, `SPEC.md` is CC0. See CONTRIBUTING.MD.
