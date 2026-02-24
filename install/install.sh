@@ -3,11 +3,11 @@
 # Installs shenan-relay as a systemd service with TLS via Let's Encrypt.
 # Tested on: Ubuntu 20.04+, Ubuntu 22.04+
 #
-# The shenan-relay binary must be provided via --binary or already present
-# at /usr/local/bin/shenan-relay (e.g. deployed by CI/CD).
+# The shenan-relay binary is deployed separately (e.g. by CI/CD) to
+# /usr/local/bin/shenan-relay before running this script.
 #
 # Usage:
-#   sudo ./install.sh --domain relay.shenan.dev --binary /path/to/shenan-relay
+#   sudo ./install.sh --domain relay.shenan.dev
 #   sudo ./install.sh --domain relay.shenan.dev --bind 0.0.0.0:8443
 #   sudo ./install.sh --uninstall
 set -euo pipefail
@@ -23,7 +23,6 @@ RENEWAL_HOOK="/etc/letsencrypt/renewal-hooks/deploy/restart-shenan-relay.sh"
 
 DOMAIN=""
 BIND="0.0.0.0:443"
-BINARY_SRC=""
 UNINSTALL=false
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
@@ -34,20 +33,20 @@ Usage: sudo $0 [OPTIONS]
 
 Options:
   --domain <domain>    Domain name for TLS (e.g. relay.shenan.dev)  [required]
-  --binary <path>      Path to shenan-relay binary (default: build from source)
   --bind <addr>        Bind address (default: 0.0.0.0:443)
   --uninstall          Remove the service, user, and renewal hook
   --help               Show this help
 
 Prerequisites on Ubuntu 20.04+:
+  # Deploy the shenan-relay binary to /usr/local/bin/shenan-relay first
   # Install certbot and the Route 53 plugin via snap (recommended)
   sudo snap install --classic certbot
   sudo snap set certbot trust-plugin-with-root=ok
   sudo snap install certbot-dns-route53
 
 Examples:
-  sudo $0 --domain relay.shenan.dev --binary ./shenan-relay
-  sudo $0 --domain relay.shenan.dev --binary ./shenan-relay --bind 0.0.0.0:8443
+  sudo $0 --domain relay.shenan.dev
+  sudo $0 --domain relay.shenan.dev --bind 0.0.0.0:8443
   sudo $0 --uninstall
 EOF
     exit 1
@@ -55,10 +54,9 @@ EOF
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --domain)    DOMAIN="$2";     shift 2 ;;
-        --binary)    BINARY_SRC="$2"; shift 2 ;;
-        --bind)      BIND="$2";       shift 2 ;;
-        --uninstall) UNINSTALL=true;  shift ;;
+        --domain)    DOMAIN="$2";    shift 2 ;;
+        --bind)      BIND="$2";      shift 2 ;;
+        --uninstall) UNINSTALL=true; shift ;;
         --help)      usage ;;
         *) echo "Unknown option: $1"; usage ;;
     esac
@@ -139,11 +137,9 @@ do_uninstall() {
     fi
 
     [[ -f "${SERVICE_FILE}" ]] \
-        && rm -f "${SERVICE_FILE}"  && ok "removed ${SERVICE_FILE}"
+        && rm -f "${SERVICE_FILE}" && ok "removed ${SERVICE_FILE}"
     [[ -f "${RENEWAL_HOOK}" ]] \
-        && rm -f "${RENEWAL_HOOK}"  && ok "removed ${RENEWAL_HOOK}"
-    [[ -f "${INSTALL_DIR}/${BINARY_NAME}" ]] \
-        && rm -f "${INSTALL_DIR}/${BINARY_NAME}" && ok "removed binary"
+        && rm -f "${RENEWAL_HOOK}" && ok "removed ${RENEWAL_HOOK}"
 
     if id "${SERVICE_USER}" &>/dev/null; then
         userdel "${SERVICE_USER}"
@@ -167,18 +163,11 @@ do_install() {
     local cert_file="${cert_dir}/fullchain.pem"
     local key_file="${cert_dir}/privkey.pem"
 
-    # ── Binary ────────────────────────────────────────────────────────────────
+    # ── Binary check ──────────────────────────────────────────────────────────
 
-    if [[ -n "${BINARY_SRC}" ]]; then
-        [[ -f "${BINARY_SRC}" ]] || die "binary not found at ${BINARY_SRC}"
-        info "Installing binary from ${BINARY_SRC}..."
-        install -o root -g root -m 755 "${BINARY_SRC}" "${INSTALL_DIR}/${BINARY_NAME}"
-    elif [[ -f "${INSTALL_DIR}/${BINARY_NAME}" ]]; then
-        info "Using existing binary at ${INSTALL_DIR}/${BINARY_NAME}"
-    else
-        die "no binary found — provide --binary <path> (e.g. deployed by CI/CD)"
-    fi
-    ok "binary installed at ${INSTALL_DIR}/${BINARY_NAME}"
+    [[ -f "${INSTALL_DIR}/${BINARY_NAME}" ]] \
+        || die "binary not found at ${INSTALL_DIR}/${BINARY_NAME} — deploy it via CI/CD first"
+    ok "binary found at ${INSTALL_DIR}/${BINARY_NAME}"
 
     # ── Service user ──────────────────────────────────────────────────────────
 
