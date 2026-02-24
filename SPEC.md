@@ -169,11 +169,11 @@ The relay fetches public keys from `https://github.com/{username}.keys`. The rel
 
 The nonce is 32 cryptographically random bytes encoded as lowercase hex. The challenge MUST be unique per connection attempt.
 
-The relay uses the user's single Ed25519 key from the fetched key list and includes its fingerprint in the challenge message, allowing the client to select the correct private key.
+The relay includes all fingerprints for the user's Ed25519 keys in the challenge message, allowing the client to select the correct private key among their registered keys.
 
 ### 6.5 Signature verification
 
-The client signs `SHA256(nonce_bytes)` with its Ed25519 private key. The relay verifies with the corresponding public key using standard EdDSA verification.
+The client signs `SHA256(nonce_bytes)` with its Ed25519 private key. The relay verifies the signature against all registered public keys for that user — if any key matches, authentication succeeds.
 
 ### 6.6 Post-authentication state
 
@@ -221,6 +221,8 @@ Where:
 - The direction string `"s2r"` is fixed — both parties use the same direction, producing an identical token
 
 Both parties know the sender's pubkey and the recipient's pubkey (fetched from GitHub). Both know which role they are in (sender or recipient), so both independently construct the same `ikm` with the same key ordering. The X25519 shared secret is identical regardless of which side computes it. The result is that both parties derive the **same** channel token without any coordination, and no third party can compute or predict the token.
+
+When a counterpart has multiple Ed25519 keys, the sender and receiver each open parallel sessions — one per key. The first session to successfully rendezvous completes the transfer; all other sessions are cancelled.
 
 ### 7.3 Channel proof
 
@@ -721,7 +723,7 @@ Cleanup SHOULD run in a background task (e.g., `tokio::spawn`), not inline with 
 
 6. **Simultaneous online requirement** — Both parties must be online within the `admission_window` (default 5 minutes). This requires out-of-band coordination ("hey, run `shenan receive` now"). A future version may add a lightweight notification mechanism.
 
-7. **Single Ed25519 key requirement** — The POC requires exactly one Ed25519 key per GitHub account and fails if zero or multiple are found. A future version should support multiple Ed25519 keys via a deterministic selection rule (e.g., first Ed25519 key in the GitHub response) or key ID negotiation, so users with multiple keys can participate without restriction.
+7. ~~**Single Ed25519 key requirement**~~ — **Implemented.** Multiple Ed25519 keys per GitHub account are now fully supported. The sender and receiver each open parallel channels (one per counterpart key); the first to rendezvous completes the transfer. Only zero keys is an error.
 
 8. **Additional key types** — Only Ed25519 is supported. RSA and ECDSA support may be added in a future version.
 
