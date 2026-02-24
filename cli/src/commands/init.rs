@@ -74,8 +74,9 @@ pub async fn run() -> Result<()> {
     storage::save_identity(&id)?;
     eprintln!("Identity saved to ~/.shenan/identity.toml");
 
-    // Ensure config exists with defaults
-    if storage::load_config()?.relay.is_empty() {
+    // Ensure config.toml exists on disk with defaults so future edits have a template.
+    let config_path = storage::config_dir()?.join("config.toml");
+    if !config_path.exists() {
         storage::save_config(&storage::Config::default())?;
     }
 

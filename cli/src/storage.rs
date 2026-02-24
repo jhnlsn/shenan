@@ -44,7 +44,17 @@ pub fn load_config() -> Result<Config> {
         return Ok(Config::default());
     }
     let contents = std::fs::read_to_string(&path)?;
-    let config: Config = toml::from_str(&contents)?;
+    let mut config: Config = toml::from_str(&contents)?;
+    if config.relay.is_empty() {
+        config.relay = default_relay();
+    } else if !config.relay.starts_with("ws://") && !config.relay.starts_with("wss://") {
+        anyhow::bail!(
+            "invalid relay URL {:?} in ~/.shenan/config.toml — must start with ws:// or wss://\n\
+             Reset it with: shenan config set relay {}",
+            config.relay,
+            default_relay()
+        );
+    }
     Ok(config)
 }
 
