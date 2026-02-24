@@ -20,10 +20,18 @@ pub fn ensure_config_dir() -> Result<PathBuf> {
 
 // ── config.toml ──
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default = "default_relay")]
     pub relay: String,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Config {
+            relay: default_relay(),
+        }
+    }
 }
 
 fn default_relay() -> String {
