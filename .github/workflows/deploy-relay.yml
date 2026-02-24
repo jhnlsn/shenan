@@ -1,0 +1,51 @@
+name: Deploy Relay
+
+on:
+  push:
+    tags:
+      - 'relay/v*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  deploy:
+    name: Build and deploy shenan-relay (aarch64)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install aarch64 cross-compiler
+        run: sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Build relay (aarch64)
+        run: cargo build --release --target aarch64-unknown-linux-gnu -p shenan-relay
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.RELAY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${{ secrets.RELAY_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Copy binary to EC2
+        run: |
+          scp -i ~/.ssh/deploy_key \
+            target/aarch64-unknown-linux-gnu/release/shenan-relay \
+            ubuntu@${{ secrets.RELAY_HOST }}:/tmp/shenan-relay
+
+      - name: Install and restart service
+        run: |
+          ssh -i ~/.ssh/deploy_key ubuntu@${{ secrets.RELAY_HOST }} \
+            'sudo install -o root -g root -m 755 /tmp/shenan-relay /usr/local/bin/shenan-relay \
+             && sudo systemctl restart shenan-relay \
+             && sudo systemctl is-active shenan-relay'
