@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>shenan — a blind pipe for secrets</title>
+  <meta name="description" content="Shenan moves encrypted secrets between developers over an ephemeral relay that never sees what's inside. Built on SSH keys you already have." />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:         #0d0d0d;
+      --bg-surface: #141414;
+      --bg-card:    #1a1a1a;
+      --border:     #2a2a2a;
+      --red:        #c0392b;
+      --red-bright: #e74c3c;
+      --red-dim:    #8b1a12;
+      --text:       #e8e8e8;
+      --text-muted: #888;
+      --text-dim:   #555;
+      --mono:       'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Menlo', 'Monaco', monospace;
+      --sans:       -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      font-size: 16px;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    a { color: var(--red-bright); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* ── NAV ── */
+    nav {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: rgba(13, 13, 13, 0.92);
+      backdrop-filter: blur(10px);
+      border-bottom: 1px solid var(--border);
+      padding: 0 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 56px;
+    }
+
+    .nav-logo {
+      font-family: var(--mono);
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: var(--text);
+      letter-spacing: -0.02em;
+    }
+
+    .nav-logo span { color: var(--red-bright); }
+
+    .nav-links {
+      display: flex;
+      gap: 1.75rem;
+      list-style: none;
+    }
+
+    .nav-links a {
+      color: var(--text-muted);
+      font-size: 0.875rem;
+      transition: color 0.15s;
+    }
+
+    .nav-links a:hover {
+      color: var(--text);
+      text-decoration: none;
+    }
+
+    /* ── HERO ── */
+    .hero {
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 5rem 2rem 3rem;
+      text-align: center;
+    }
+
+    .hero-eyebrow {
+      display: inline-block;
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      color: var(--red-bright);
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      margin-bottom: 1.5rem;
+      background: rgba(231, 76, 60, 0.08);
+      border: 1px solid rgba(231, 76, 60, 0.25);
+      padding: 0.3rem 0.8rem;
+      border-radius: 2px;
+    }
+
+    .hero h1 {
+      font-size: clamp(2.2rem, 5vw, 3.6rem);
+      font-weight: 700;
+      line-height: 1.15;
+      letter-spacing: -0.03em;
+      color: var(--text);
+      margin-bottom: 1.25rem;
+    }
+
+    .hero h1 em {
+      font-style: normal;
+      color: var(--red-bright);
+    }
+
+    .hero-sub {
+      font-size: 1.15rem;
+      color: var(--text-muted);
+      max-width: 600px;
+      margin: 0 auto 3rem;
+      line-height: 1.7;
+    }
+
+    /* ── INSTALL BOX ── */
+    .install-wrap {
+      max-width: 640px;
+      margin: 0 auto;
+    }
+
+    .install-label {
+      font-size: 0.8rem;
+      color: var(--text-dim);
+      font-family: var(--mono);
+      text-align: left;
+      margin-bottom: 0.5rem;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    .install-box {
+      display: flex;
+      align-items: center;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 0;
+      overflow: hidden;
+      transition: border-color 0.2s;
+    }
+
+    .install-box:hover {
+      border-color: var(--red-dim);
+    }
+
+    .install-prompt {
+      font-family: var(--mono);
+      font-size: 0.85rem;
+      color: var(--red-bright);
+      padding: 0.9rem 0.6rem 0.9rem 1.1rem;
+      user-select: none;
+      flex-shrink: 0;
+    }
+
+    .install-cmd {
+      font-family: var(--mono);
+      font-size: 0.875rem;
+      color: var(--text);
+      padding: 0.9rem 0;
+      flex: 1;
+      overflow-x: auto;
+      white-space: nowrap;
+    }
+
+    .copy-btn {
+      background: transparent;
+      border: none;
+      border-left: 1px solid var(--border);
+      color: var(--text-muted);
+      cursor: pointer;
+      padding: 0.9rem 1rem;
+      font-size: 0.8rem;
+      font-family: var(--sans);
+      transition: background 0.15s, color 0.15s;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .copy-btn:hover {
+      background: rgba(231, 76, 60, 0.08);
+      color: var(--red-bright);
+    }
+
+    .copy-btn.copied {
+      color: #4caf50;
+    }
+
+    .install-note {
+      margin-top: 0.75rem;
+      font-size: 0.8rem;
+      color: var(--text-dim);
+      text-align: center;
+    }
+
+    .install-note a { font-size: 0.8rem; }
+
+    /* ── DIVIDER ── */
+    .section-divider {
+      max-width: 860px;
+      margin: 4rem auto;
+      border: none;
+      border-top: 1px solid var(--border);
+    }
+
+    /* ── WHAT IT IS ── */
+    .what {
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 0 2rem;
+    }
+
+    .what-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.5rem;
+      margin-top: 2.5rem;
+    }
+
+    @media (max-width: 600px) {
+      .what-grid { grid-template-columns: 1fr; }
+      .hero h1 { font-size: 2rem; }
+      .nav-links { display: none; }
+    }
+
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 1.5rem;
+    }
+
+    .card-icon {
+      font-size: 1.25rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .card h3 {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 0.5rem;
+    }
+
+    .card p {
+      font-size: 0.875rem;
+      color: var(--text-muted);
+      line-height: 1.65;
+    }
+
+    /* ── USAGE ── */
+    .usage {
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 0 2rem;
+    }
+
+    .section-header {
+      margin-bottom: 1.5rem;
+    }
+
+    .section-header h2 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: var(--text);
+    }
+
+    .section-header p {
+      margin-top: 0.4rem;
+      font-size: 0.9rem;
+      color: var(--text-muted);
+    }
+
+    .codeblock {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    .codeblock-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.5rem 1rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg-surface);
+    }
+
+    .codeblock-title {
+      font-size: 0.75rem;
+      font-family: var(--mono);
+      color: var(--text-dim);
+      letter-spacing: 0.04em;
+    }
+
+    .codeblock pre {
+      padding: 1.25rem 1.5rem;
+      overflow-x: auto;
+      font-family: var(--mono);
+      font-size: 0.85rem;
+      line-height: 1.75;
+    }
+
+    .codeblock code .comment { color: var(--text-dim); }
+    .codeblock code .cmd     { color: var(--text); }
+    .codeblock code .flag    { color: #d4ac80; }
+    .codeblock code .val     { color: #9ecdf1; }
+    .codeblock code .prompt  { color: var(--red-bright); user-select: none; }
+
+    /* ── SECURITY TABLE ── */
+    .security {
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 0 2rem;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.875rem;
+      margin-top: 1.5rem;
+    }
+
+    th {
+      text-align: left;
+      font-weight: 600;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-dim);
+      padding: 0.6rem 1rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    td {
+      padding: 0.75rem 1rem;
+      border-bottom: 1px solid rgba(42, 42, 42, 0.6);
+      color: var(--text-muted);
+      vertical-align: top;
+    }
+
+    td:first-child {
+      color: var(--text);
+      font-weight: 500;
+      white-space: nowrap;
+    }
+
+    tr:last-child td { border-bottom: none; }
+
+    .check {
+      color: var(--red-bright);
+      font-size: 0.85rem;
+      margin-right: 0.4rem;
+    }
+
+    /* ── FOOTER ── */
+    footer {
+      max-width: 860px;
+      margin: 5rem auto 3rem;
+      padding: 2rem 2rem 0;
+      border-top: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 1rem;
+    }
+
+    .footer-logo {
+      font-family: var(--mono);
+      font-size: 0.9rem;
+      color: var(--text-dim);
+    }
+
+    .footer-logo span { color: var(--red-bright); }
+
+    .footer-links {
+      display: flex;
+      gap: 1.5rem;
+      list-style: none;
+    }
+
+    .footer-links a {
+      font-size: 0.8rem;
+      color: var(--text-dim);
+    }
+
+    .footer-links a:hover { color: var(--text); }
+
+    .footer-note {
+      width: 100%;
+      font-size: 0.78rem;
+      color: var(--text-dim);
+      margin-top: 0.5rem;
+    }
+
+    /* ── ACCENT LINE ── */
+    .red-line {
+      width: 2.5rem;
+      height: 2px;
+      background: var(--red);
+      margin: 1rem auto 0;
+    }
+  </style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav>
+  <div class="nav-logo">shenan<span>.</span>dev</div>
+  <ul class="nav-links">
+    <li><a href="#install">Install</a></li>
+    <li><a href="#usage">Usage</a></li>
+    <li><a href="#security">Security</a></li>
+    <li><a href="https://github.com/jhnlsn/shenan">GitHub</a></li>
+  </ul>
+</nav>
+
+<!-- HERO -->
+<section class="hero" id="install">
+  <div class="hero-eyebrow">Pre-alpha · open source</div>
+  <h1>Shenanigans.</h1>
+  <p class="hero-sub">
+    Shenan moves an encrypted secret from one machine to another without ever seeing what's inside.
+    No storage. No accounts. Built on the SSH keys you already have.
+  </p>
+
+  <div class="install-wrap">
+    <div class="install-label">// install</div>
+    <div class="install-box">
+      <span class="install-prompt">$</span>
+      <span class="install-cmd" id="install-cmd">curl -fsSL https://shenan.dev/install.sh | sh</span>
+      <button class="copy-btn" id="copy-btn" onclick="copyInstall()">Copy</button>
+    </div>
+    <p class="install-note">
+      macOS &amp; Linux &nbsp;·&nbsp;
+      <a href="https://github.com/jhnlsn/shenan">build from source</a>
+    </p>
+  </div>
+</section>
+
+<hr class="section-divider" />
+
+<!-- WHAT IT IS -->
+<section class="what">
+  <div class="section-header" style="text-align:center;">
+    <h2>Secrets that can't be harvested</h2>
+    <div class="red-line"></div>
+  </div>
+
+  <div class="what-grid">
+    <div class="card">
+      <div class="card-icon">⚡</div>
+      <h3>No storage, ever</h3>
+      <p>The relay carries encrypted bytes it cannot read. There is no database, no buffer, no log. By the time a secret has been transmitted the relay has already forgotten the transaction.</p>
+    </div>
+    <div class="card">
+      <div class="card-icon">🔑</div>
+      <h3>Your SSH key is your identity</h3>
+      <p>No new accounts. No new keypairs. Shenan reads the Ed25519 key already in your <code style="font-family:var(--mono);font-size:0.82rem;">~/.ssh</code> and uses GitHub as a public key registry.</p>
+    </div>
+    <div class="card">
+      <div class="card-icon">🕳️</div>
+      <h3>Blind relay</h3>
+      <p>After authentication, the relay discards your GitHub username immediately. It holds only an ephemeral ID linked to your socket. No identity graph is ever constructed.</p>
+    </div>
+    <div class="card">
+      <div class="card-icon">⏱️</div>
+      <h3>Tokens rotate every hour</h3>
+      <p>Channels are derived client-side with HKDF over the current time window. A captured token expires in &lt;60 minutes. Nothing useful to harvest.</p>
+    </div>
+  </div>
+</section>
+
+<hr class="section-divider" />
+
+<!-- USAGE -->
+<section class="usage" id="usage">
+  <div class="section-header">
+    <h2>Usage</h2>
+    <p>Both parties must be online simultaneously — shenan is a pipe, not a mailbox.</p>
+  </div>
+
+  <div class="codeblock" style="margin-bottom:1.5rem;">
+    <div class="codeblock-header">
+      <span class="codeblock-title">quick start</span>
+    </div>
+    <pre><code><span class="comment"># discover your local SSH key, set up trust store</span>
+<span class="prompt">$</span> <span class="cmd">shenan init</span>
+
+<span class="comment"># trust a colleague's GitHub account</span>
+<span class="prompt">$</span> <span class="cmd">shenan trust add</span> <span class="val">github:alice</span>
+
+<span class="comment"># Alice sends a secret to Bob (blocks until Bob connects)</span>
+<span class="prompt">alice $</span> <span class="cmd">shenan send</span> <span class="flag">--to</span> <span class="val">github:bob</span> <span class="val">DATABASE_URL=postgres://prod/mydb</span>
+
+<span class="comment"># Bob receives it (blocks until Alice connects)</span>
+<span class="prompt">bob $</span> <span class="cmd">shenan receive</span> <span class="flag">--from</span> <span class="val">github:alice</span>
+
+<span class="comment"># write directly to a file</span>
+<span class="prompt">bob $</span> <span class="cmd">shenan receive</span> <span class="flag">--from</span> <span class="val">github:alice</span> <span class="flag">--out</span> <span class="val">.env</span></code></pre>
+  </div>
+
+  <div class="codeblock">
+    <div class="codeblock-header">
+      <span class="codeblock-title">send multiple secrets / from a file</span>
+    </div>
+    <pre><code><span class="comment"># send multiple env vars inline</span>
+<span class="prompt">$</span> <span class="cmd">shenan send</span> <span class="flag">--to</span> <span class="val">github:alice</span> <span class="val">\
+  DATABASE_URL=postgres://... \
+  REDIS_URL=redis://... \
+  API_KEY=sk-abc123</span>
+
+<span class="comment"># pipe in a file</span>
+<span class="prompt">$</span> <span class="cmd">shenan send</span> <span class="flag">--to</span> <span class="val">github:alice</span> <span class="flag">&lt;</span> <span class="val">.env.production</span></code></pre>
+  </div>
+</section>
+
+<hr class="section-divider" />
+
+<!-- SECURITY -->
+<section class="security" id="security">
+  <div class="section-header">
+    <h2>Security properties</h2>
+    <p>What the relay can and cannot know.</p>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Property</th>
+        <th>Guarantee</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Encryption</td>
+        <td><span class="check">✦</span>End-to-end, client-side only (X25519 + ChaCha20-Poly1305)</td>
+      </tr>
+      <tr>
+        <td>Forward secrecy</td>
+        <td><span class="check">✦</span>Fresh ephemeral keypair per send</td>
+      </tr>
+      <tr>
+        <td>Relay knowledge</td>
+        <td><span class="check">✦</span>Anonymous ephemeral IDs only — username discarded after auth</td>
+      </tr>
+      <tr>
+        <td>Relationship graph</td>
+        <td><span class="check">✦</span>Never constructed, never stored</td>
+      </tr>
+      <tr>
+        <td>Ciphertext at rest</td>
+        <td><span class="check">✦</span>Structurally impossible — relay has no persistence layer</td>
+      </tr>
+      <tr>
+        <td>Harvest now / decrypt later</td>
+        <td><span class="check">✦</span>No surface to harvest</td>
+      </tr>
+      <tr>
+        <td>Relay compromise impact</td>
+        <td><span class="check">✦</span>Zero — nothing to learn, nothing to steal</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <div class="footer-logo">shenan<span>.</span>dev</div>
+  <ul class="footer-links">
+    <li><a href="https://github.com/jhnlsn/shenan">GitHub</a></li>
+    <li><a href="https://github.com/jhnlsn/shenan/blob/main/SPEC.md">Spec</a></li>
+    <li><a href="https://github.com/jhnlsn/shenan/blob/main/CONTRIBUTING.MD">Contributing</a></li>
+  </ul>
+  <p class="footer-note">
+    CLI is MIT licensed. Relay is AGPL-3.0. Spec is CC0.
+    &nbsp;·&nbsp;
+    <em>From Irish Sionainn — a blind pipe for secrets.</em>
+  </p>
+</footer>
+
+<script>
+  function copyInstall() {
+    const cmd = document.getElementById('install-cmd').textContent.trim();
+    const btn = document.getElementById('copy-btn');
+    navigator.clipboard.writeText(cmd).then(() => {
+      btn.textContent = 'Copied!';
+      btn.classList.add('copied');
+      setTimeout(() => {
+        btn.textContent = 'Copy';
+        btn.classList.remove('copied');
+      }, 2000);
+    });
+  }
+</script>
+
+</body>
+</html>
