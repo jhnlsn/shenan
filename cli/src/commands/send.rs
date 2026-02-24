@@ -26,6 +26,11 @@ pub async fn run(
 
     // Load local identity
     let id = storage::load_identity()?.context("not initialized — run `shenan init` first")?;
+    if is_self_target(to_username, &id.github_username) {
+        anyhow::bail!(
+            "refusing to send to yourself (target: github:{to_username}). use a different recipient"
+        );
+    }
     let signing_key = identity::load_signing_key(&PathBuf::from(&id.ssh_key_path))?;
     let config = storage::load_config()?;
 
@@ -150,9 +155,13 @@ fn is_valid_env_key(key: &str) -> bool {
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+fn is_self_target(target_username: &str, my_username: &str) -> bool {
+    target_username.eq_ignore_ascii_case(my_username)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::parse_key_values;
+    use super::{is_self_target, parse_key_values};
 
     #[test]
     fn parse_key_values_basic() {
@@ -188,5 +197,15 @@ mod tests {
     fn parse_key_values_rejects_invalid_env_key_chars() {
         let args = vec!["BAD-KEY=value".to_string()];
         assert!(parse_key_values(&args).is_err());
+    }
+
+    #[test]
+    fn is_self_target_matches_case_insensitively() {
+        assert!(is_self_target("Alice-Dev", "alice-dev"));
+    }
+
+    #[test]
+    fn is_self_target_rejects_other_users() {
+        assert!(!is_self_target("alice-dev", "bob-dev"));
     }
 }
