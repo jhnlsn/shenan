@@ -52,13 +52,13 @@ enum Commands {
         #[arg(long)]
         from: String,
 
-        /// Write secrets to a file (default: stdout)
+        /// Write secrets to a file (default: .env in current directory)
         #[arg(long)]
         out: Option<PathBuf>,
 
-        /// Merge with existing file instead of overwriting
+        /// Overwrite the output file instead of appending to it
         #[arg(long)]
-        merge: bool,
+        overwrite: bool,
 
         /// Relay URL override (e.g. ws://127.0.0.1:9000)
         #[arg(long, env = "SHENAN_RELAY")]
@@ -122,9 +122,9 @@ async fn main() {
         Commands::Receive {
             from,
             out,
-            merge,
+            overwrite,
             relay,
-        } => commands::receive::run(&from, out, merge, relay).await,
+        } => commands::receive::run(&from, out, overwrite, relay).await,
         Commands::Trust { action } => match action {
             TrustAction::Add { target } => commands::trust::add(&target),
             TrustAction::Remove { target } => commands::trust::remove(&target),

@@ -14,7 +14,7 @@ use crate::storage;
 pub async fn run(
     from: &str,
     out: Option<PathBuf>,
-    merge: bool,
+    overwrite: bool,
     relay_override: Option<String>,
 ) -> Result<()> {
     let from_username = from
@@ -104,23 +104,15 @@ pub async fn run(
         );
     }
 
-    // Output
-    if let Some(out_path) = out {
-        dotenv::write_dotenv_file(&out_path, &payload.secrets, merge)?;
-        eprintln!(
-            "Wrote {} secret(s) to {}",
-            payload.secrets.len(),
-            out_path.display()
-        );
-    } else {
-        // Print to stdout
-        print!("{}", dotenv::format_dotenv(&payload.secrets));
-    }
-
+    // Default output path is .env in the current directory
+    let out_path = out.unwrap_or_else(|| PathBuf::from(".env"));
+    let merge = !overwrite;
+    dotenv::write_dotenv_file(&out_path, &payload.secrets, merge)?;
     eprintln!(
-        "Received {} secret(s) from {}",
+        "Wrote {} secret(s) to {} ({})",
         payload.secrets.len(),
-        from_username
+        out_path.display(),
+        if merge { "appended" } else { "overwritten" }
     );
 
     Ok(())
