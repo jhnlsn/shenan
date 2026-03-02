@@ -135,7 +135,12 @@ mod tests {
         let window = 99u64;
 
         // Self-DH (same key on both sides) must produce a non-zero, non-degenerate token
-        let token = derive_token(&alice, &alice.verifying_key(), &alice.verifying_key(), window);
+        let token = derive_token(
+            &alice,
+            &alice.verifying_key(),
+            &alice.verifying_key(),
+            window,
+        );
         assert_ne!(*token, [0u8; 32]);
     }
 }

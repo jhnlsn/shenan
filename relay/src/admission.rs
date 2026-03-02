@@ -52,5 +52,4 @@ mod tests {
         let sig = signer.sign(&hash);
         assert!(verify_channel_proof(&pubkey, &token, &sig.to_bytes()).is_ok());
     }
-
 }

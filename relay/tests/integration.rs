@@ -146,7 +146,6 @@ async fn read_text(stream: &mut WsStream) -> String {
     }
 }
 
-
 async fn read_binary(stream: &mut WsStream) -> Vec<u8> {
     loop {
         match stream.next().await {

@@ -209,5 +209,4 @@ mod tests {
         let args = vec!["BAD-KEY=value".to_string()];
         assert!(parse_key_values(&args).is_err());
     }
-
 }
