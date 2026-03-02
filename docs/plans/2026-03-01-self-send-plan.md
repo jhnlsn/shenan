@@ -232,7 +232,7 @@ git commit -m "feat(cli): add github:me alias and allow self-send"
 
 ---
 
-### Task 4: Add `github:me` alias and skip self-trust check (CLI receive)
+### Task 4: Add `github:me` alias to receive (trust check unchanged)
 
 **Files:**
 - Modify: `cli/src/commands/receive.rs`
@@ -259,7 +259,7 @@ mod tests {
 cargo test -p shenan 'receive::tests::github_me_resolves_to_own_username'
 ```
 
-Expected: FAIL — `is_me` doesn't exist in receive
+Expected: FAIL — `is_me` doesn't exist yet
 
 **Step 3: Implement**
 
@@ -272,7 +272,7 @@ fn is_me(username: &str) -> bool {
 }
 ```
 
-2. Replace the username extraction and trust check. Find this existing code:
+2. Replace only the username extraction at the top of `run()`. Find:
 ```rust
 let from_username = from
     .strip_prefix("github:")
@@ -280,17 +280,6 @@ let from_username = from
 
 // Load local identity
 let id = storage::load_identity()?.context("not initialized — run `shenan init` first")?;
-let signing_key = identity::load_signing_key(&PathBuf::from(&id.ssh_key_path))?;
-let config = storage::load_config()?;
-
-// Verify sender is trusted
-let trusted = storage::load_trusted_senders()?;
-if !trusted.senders.iter().any(|s| s.github == from_username) {
-    anyhow::bail!(
-        "{from_username} is not in your trusted senders list.\n\
-         Add them with: shenan trust add github:{from_username}"
-    );
-}
 ```
 
 Replace with:
@@ -301,8 +290,6 @@ let from_raw = from
 
 // Load local identity
 let id = storage::load_identity()?.context("not initialized — run `shenan init` first")?;
-let signing_key = identity::load_signing_key(&PathBuf::from(&id.ssh_key_path))?;
-let config = storage::load_config()?;
 
 // Resolve "me" alias to the local GitHub username
 let from_username = if is_me(from_raw) {
@@ -310,18 +297,9 @@ let from_username = if is_me(from_raw) {
 } else {
     from_raw
 };
-
-// Verify sender is trusted (self is always trusted)
-if from_username != id.github_username.as_str() {
-    let trusted = storage::load_trusted_senders()?;
-    if !trusted.senders.iter().any(|s| s.github == from_username) {
-        anyhow::bail!(
-            "{from_username} is not in your trusted senders list.\n\
-             Add them with: shenan trust add github:{from_username}"
-        );
-    }
-}
 ```
+
+Leave the trust check, key fetching, session code — everything else — completely untouched.
 
 **Step 4: Run tests**
 
@@ -335,7 +313,116 @@ Expected: all pass
 
 ```bash
 git add cli/src/commands/receive.rs
-git commit -m "feat(cli): add github:me alias to receive; skip trust check for self"
+git commit -m "feat(cli): add github:me alias to receive command"
+```
+
+---
+
+### Task 4b: Add `github:me` alias to trust command
+
+**Context:** `trust add` stores the username literally. Without this task, `shenan trust add github:me` would store the string `"me"` in the trust file, which would never match the resolved actual username in receive. Zero-trust is preserved — you must explicitly add yourself — but `github:me` must resolve to your real username before storage.
+
+**Files:**
+- Modify: `cli/src/commands/trust.rs`
+
+**Step 1: Write the failing test**
+
+In `trust.rs`, add to the existing `#[cfg(test)] mod tests` block:
+
+```rust
+#[test]
+fn parse_github_ref_rejects_me_literal() {
+    // "me" is a valid GitHub username format, but must be resolved before storage.
+    // parse_github_ref itself doesn't resolve — the caller (add/remove) must do it.
+    // This test documents that "me" passes the format check (resolution is caller's job).
+    assert_eq!(parse_github_ref("github:me").unwrap(), "me");
+}
+```
+
+**Step 2: Run test to verify it passes**
+
+```bash
+cargo test -p shenan 'trust::tests::parse_github_ref_rejects_me_literal'
+```
+
+Expected: PASS — this documents current behavior before the fix
+
+**Step 3: Add `is_me` helper and resolve in `add` and `remove`**
+
+1. Add `is_me` helper near the bottom of the file (above `#[cfg(test)]`):
+```rust
+fn is_me(username: &str) -> bool {
+    username.eq_ignore_ascii_case("me")
+}
+```
+
+2. Modify `add` to resolve `me` before storing. Find:
+```rust
+pub fn add(target: &str) -> Result<()> {
+    let username = parse_github_ref(target)?;
+    let mut ts = storage::load_trusted_senders()?;
+```
+
+Replace with:
+```rust
+pub fn add(target: &str) -> Result<()> {
+    let raw = parse_github_ref(target)?;
+    let username = if is_me(&raw) {
+        let id = crate::storage::load_identity()?
+            .context("not initialized — run `shenan init` first")?;
+        id.github_username.clone()
+    } else {
+        raw
+    };
+    let mut ts = storage::load_trusted_senders()?;
+```
+
+You'll need to add `use anyhow::Context;` at the top of the file if it isn't already imported. Check the existing imports first — `anyhow::Result` is already imported, so add `Context` to that use:
+```rust
+use anyhow::{Context, Result};
+```
+
+3. Apply the same pattern to `remove`:
+```rust
+pub fn remove(target: &str) -> Result<()> {
+    let raw = parse_github_ref(target)?;
+    let username = if is_me(&raw) {
+        let id = crate::storage::load_identity()?
+            .context("not initialized — run `shenan init` first")?;
+        id.github_username.clone()
+    } else {
+        raw
+    };
+    let mut ts = storage::load_trusted_senders()?;
+```
+
+**Step 4: Add a test documenting the resolved behavior**
+
+Add to `#[cfg(test)] mod tests`:
+```rust
+#[test]
+fn is_me_matches_case_insensitively() {
+    assert!(super::is_me("me"));
+    assert!(super::is_me("ME"));
+    assert!(super::is_me("Me"));
+    assert!(!super::is_me("myself"));
+    assert!(!super::is_me("alice"));
+}
+```
+
+**Step 5: Run tests**
+
+```bash
+cargo test -p shenan 'trust::tests'
+```
+
+Expected: all pass
+
+**Step 6: Commit**
+
+```bash
+git add cli/src/commands/trust.rs
+git commit -m "feat(cli): resolve github:me alias in trust add/remove"
 ```
 
 ---
@@ -427,5 +514,14 @@ After all tasks, the feature is complete when:
 
 1. `cargo test --workspace` passes
 2. `cargo clippy --all-targets` is clean
-3. `shenan send --to=github:me KEY=val` on machine A connects to the relay and waits
-4. `shenan receive --from=github:me` on machine B (same SSH key, same GitHub account) connects and receives the secret
+3. Full self-send workflow works end-to-end:
+   ```
+   # One-time setup on both machines (zero trust preserved — explicit opt-in required)
+   shenan trust add github:me
+
+   # Machine A
+   shenan send --to=github:me DB_PASSWORD=hunter2
+
+   # Machine B (same SSH key, same GitHub account)
+   shenan receive --from=github:me
+   ```
