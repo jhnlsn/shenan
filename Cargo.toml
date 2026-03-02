@@ -8,7 +8,7 @@ edition = "2021"
 rust-version = "1.75"
 
 [workspace.dependencies]
-hyper-rustls = { version = "0.27.7", default-features = false, features = ["http1", "tls12", "webpki-tokio", "webpki-roots"] }
+hyper-rustls = { version = "0.27.7", default-features = false, features = ["http1", "tls12", "webpki-tokio", "webpki-roots", "aws-lc-rs"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
@@ -34,11 +34,11 @@ ssh-key = { version = "0.6", features = ["ed25519"] }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 
 # HTTP
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots-no-provider"] }
 
 # TLS
-tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring", "tls12"] }
-rustls = { version = "0.23.36", default-features = false, features = ["ring", "tls12", "std"] }
+tokio-rustls = { version = "0.26.4", default-features = false, features = ["aws-lc-rs", "tls12"] }
+rustls = { version = "0.23.36", default-features = false, features = ["aws-lc-rs", "tls12", "std"] }
 rustls-pemfile = "2"
 
 # Misc
