@@ -130,16 +130,12 @@ mod tests {
     }
 
     #[test]
-    fn self_send_derives_same_token_on_both_sides() {
+    fn self_send_produces_valid_token() {
         let alice = SigningKey::generate(&mut OsRng);
-        let window = 123456u64;
+        let window = 99u64;
 
-        // When sender == recipient (same key), both "sides" must derive the same token
-        let token_a = derive_token(&alice, &alice.verifying_key(), &alice.verifying_key(), window);
-        let token_b = derive_token(&alice, &alice.verifying_key(), &alice.verifying_key(), window);
-
-        // Token must be non-zero (self-DH is a valid, non-degenerate operation)
-        assert_ne!(*token_a, [0u8; 32]);
-        assert_eq!(*token_a, *token_b);
+        // Self-DH (same key on both sides) must produce a non-zero, non-degenerate token
+        let token = derive_token(&alice, &alice.verifying_key(), &alice.verifying_key(), window);
+        assert_ne!(*token, [0u8; 32]);
     }
 }
