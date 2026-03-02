@@ -1016,10 +1016,8 @@ async fn two_simultaneous_channels_dont_cross() {
     assert!(matches!(dave_resp, wire::Message::Connected));
 
     // First arrivals also receive Connected.
-    let (alice_connected, carol_connected) = tokio::join!(
-        read_text(&mut alice_stream),
-        read_text(&mut carol_stream),
-    );
+    let (alice_connected, carol_connected) =
+        tokio::join!(read_text(&mut alice_stream), read_text(&mut carol_stream),);
     assert!(matches!(
         wire::Message::from_json(&alice_connected).unwrap(),
         wire::Message::Connected
