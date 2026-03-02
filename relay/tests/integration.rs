@@ -146,18 +146,6 @@ async fn read_text(stream: &mut WsStream) -> String {
     }
 }
 
-/// Read text, returning None if the connection was reset (for error-path tests).
-async fn try_read_text(stream: &mut WsStream) -> Option<String> {
-    loop {
-        match stream.next().await {
-            Some(Ok(Message::Text(t))) => return Some(t.to_string()),
-            Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => continue,
-            Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return None,
-            Some(Ok(_)) => return None,
-        }
-    }
-}
-
 async fn read_binary(stream: &mut WsStream) -> Vec<u8> {
     loop {
         match stream.next().await {
@@ -368,8 +356,8 @@ async fn auth_with_wrong_key_rejected() {
 }
 
 #[tokio::test]
-async fn same_pubkey_both_sides_rejected() {
-    // Alice tries to be both sender and receiver
+async fn same_pubkey_both_sides_allowed() {
+    // Alice sends to herself (self-send)
     let alice_key = SigningKey::generate(&mut OsRng);
     let alice_pub = alice_key.verifying_key();
 
@@ -397,8 +385,7 @@ async fn same_pubkey_both_sides_rejected() {
     .await;
     assert!(matches!(resp_a, wire::Message::Waiting { .. }));
 
-    // Second joins with same pubkey — should be rejected
-    // Send channel message manually since error may race with connection drop
+    // Second joins with same pubkey — should now be accepted (self-send)
     let token = channel::derive_token(&alice_key, &alice_pub, &alice_pub, window);
     let proof = channel::sign_token(&alice_key, &token);
     let my_pub_wire = ssh::ed25519_to_ssh_wire(&alice_key.verifying_key().to_bytes());
@@ -413,16 +400,11 @@ async fn same_pubkey_both_sides_rejected() {
         .await
         .unwrap();
 
-    let resp = try_read_text(&mut stream_b).await;
-    if let Some(resp) = resp {
-        match wire::Message::from_json(&resp).unwrap() {
-            wire::Message::Error { code, .. } => {
-                assert_eq!(code, wire::error_codes::AUTH_FAILED);
-            }
-            other => panic!("expected error for same pubkey, got: {other:?}"),
-        }
+    let resp = read_text(&mut stream_b).await;
+    match wire::Message::from_json(&resp).unwrap() {
+        wire::Message::Connected => {}
+        other => panic!("expected Connected for same-pubkey self-send, got: {other:?}"),
     }
-    // Connection may also just be reset for same-pubkey rejection
 }
 
 #[tokio::test]

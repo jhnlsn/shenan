@@ -20,14 +20,6 @@ pub fn verify_channel_proof(
         .map_err(|e| format!("proof verification failed: {e}"))
 }
 
-/// Admission check: two distinct parties (§7.4 check_1).
-pub fn admission_check(pubkey_1: &[u8], pubkey_2: &[u8]) -> Result<(), String> {
-    if pubkey_1 == pubkey_2 {
-        return Err("same pubkey on both sides of channel".into());
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -59,11 +51,5 @@ mod tests {
         let hash = Sha256::digest(token);
         let sig = signer.sign(&hash);
         assert!(verify_channel_proof(&pubkey, &token, &sig.to_bytes()).is_ok());
-    }
-
-    #[test]
-    fn admission_check_rejects_identical_keys() {
-        let key = vec![1u8; 32];
-        assert!(admission_check(&key, &key).is_err());
     }
 }

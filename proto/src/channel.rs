@@ -128,4 +128,19 @@ mod tests {
         // Bob's key can't verify Alice's proof
         assert!(verify_proof(&bob.verifying_key(), &token, &proof).is_err());
     }
+
+    #[test]
+    fn self_send_produces_valid_token() {
+        let alice = SigningKey::generate(&mut OsRng);
+        let window = 99u64;
+
+        // Self-DH (same key on both sides) must produce a non-zero, non-degenerate token
+        let token = derive_token(
+            &alice,
+            &alice.verifying_key(),
+            &alice.verifying_key(),
+            window,
+        );
+        assert_ne!(*token, [0u8; 32]);
+    }
 }

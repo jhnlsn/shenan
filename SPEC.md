@@ -260,11 +260,10 @@ The relay identifies the client by its WebSocket connection, not by a bearer tok
 1. Checks that the connection corresponds to an authenticated session
 2. Looks up the pending entry for this `channel_token`
 3. Verifies `channel_proof` is a valid signature over `SHA256(channel_token)` using the provided `pubkey`
-4. Performs the **admission check**:
-
-```
-check_1: pubkey_1 ≠ pubkey_2    // two distinct parties
-```
+4. Opens the bidirectional pipe if the proof is valid. Same-pubkey channels are
+   permitted — a user may send to themselves across devices using the same SSH key.
+   The proof requirement (step 3) is sufficient: only the key owner can produce a
+   valid signature over `SHA256(channel_token)`.
 
 The channel token includes a Diffie-Hellman shared secret (§7.2) that only the two legitimate parties can compute. This makes the token unguessable by third parties, preventing channel squatting at the derivation level. The relay does not need to re-derive the token — the cryptographic properties of the derivation ensure that only the correct parties can produce a matching token and a valid proof over it.
 
@@ -306,7 +305,7 @@ When a client presents a channel join (see §7.4), and no pending entry exists f
 
 When a second client presents the same `channel_token`:
 
-1. The relay verifies the proof and performs the admission check as described in §7.4 (second arrival)
+1. The relay verifies the proof as described in §7.4 (second arrival)
 2. If all checks pass: the relay opens a bidirectional pipe between the two sockets and MUST immediately discard all channel state — channel token, both proofs, both pubkeys
 3. If any check fails: the relay closes BOTH connections with `{"type":"error","code":"auth_failed"}` and MUST discard all channel state
 

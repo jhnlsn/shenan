@@ -20,17 +20,19 @@ pub async fn run(
     stdin: bool,
     relay_override: Option<String>,
 ) -> Result<()> {
-    let to_username = to
+    let to_raw = to
         .strip_prefix("github:")
         .ok_or_else(|| anyhow::anyhow!("--to must be in format github:<username>"))?;
 
     // Load local identity
     let id = storage::load_identity()?.context("not initialized — run `shenan init` first")?;
-    if is_self_target(to_username, &id.github_username) {
-        anyhow::bail!(
-            "refusing to send to yourself (target: github:{to_username}). use a different recipient"
-        );
-    }
+
+    // Resolve "me" alias to the local GitHub username
+    let to_username = if is_me(to_raw) {
+        id.github_username.as_str()
+    } else {
+        to_raw
+    };
     let signing_key = identity::load_signing_key(&PathBuf::from(&id.ssh_key_path))?;
     let config = storage::load_config()?;
 
@@ -155,13 +157,22 @@ fn is_valid_env_key(key: &str) -> bool {
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-fn is_self_target(target_username: &str, my_username: &str) -> bool {
-    target_username.eq_ignore_ascii_case(my_username)
+fn is_me(username: &str) -> bool {
+    username.eq_ignore_ascii_case("me")
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{is_self_target, parse_key_values};
+    use super::{is_me, parse_key_values};
+
+    #[test]
+    fn github_me_resolves_to_own_username() {
+        assert!(is_me("me"));
+        assert!(is_me("ME"));
+        assert!(is_me("Me"));
+        assert!(!is_me("alice"));
+        assert!(!is_me("myself"));
+    }
 
     #[test]
     fn parse_key_values_basic() {
@@ -197,15 +208,5 @@ mod tests {
     fn parse_key_values_rejects_invalid_env_key_chars() {
         let args = vec!["BAD-KEY=value".to_string()];
         assert!(parse_key_values(&args).is_err());
-    }
-
-    #[test]
-    fn is_self_target_matches_case_insensitively() {
-        assert!(is_self_target("Alice-Dev", "alice-dev"));
-    }
-
-    #[test]
-    fn is_self_target_rejects_other_users() {
-        assert!(!is_self_target("alice-dev", "bob-dev"));
     }
 }
