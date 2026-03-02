@@ -42,15 +42,18 @@ fn is_valid_github_username(username: &str) -> bool {
     true
 }
 
-pub fn add(target: &str) -> Result<()> {
+fn resolve_username(target: &str) -> Result<String> {
     let raw = parse_github_ref(target)?;
-    let username = if is_me(&raw) {
-        let id = crate::storage::load_identity()?
-            .context("not initialized — run `shenan init` first")?;
-        id.github_username.clone()
+    if super::is_me(&raw) {
+        let id = storage::load_identity()?.context("not initialized — run `shenan init` first")?;
+        Ok(id.github_username.clone())
     } else {
-        raw
-    };
+        Ok(raw)
+    }
+}
+
+pub fn add(target: &str) -> Result<()> {
+    let username = resolve_username(target)?;
     let mut ts = storage::load_trusted_senders()?;
 
     if ts.senders.iter().any(|s| s.github == username) {
@@ -67,14 +70,7 @@ pub fn add(target: &str) -> Result<()> {
 }
 
 pub fn remove(target: &str) -> Result<()> {
-    let raw = parse_github_ref(target)?;
-    let username = if is_me(&raw) {
-        let id = crate::storage::load_identity()?
-            .context("not initialized — run `shenan init` first")?;
-        id.github_username.clone()
-    } else {
-        raw
-    };
+    let username = resolve_username(target)?;
     let mut ts = storage::load_trusted_senders()?;
 
     let before = ts.senders.len();
@@ -105,10 +101,6 @@ pub fn list() -> Result<()> {
     Ok(())
 }
 
-fn is_me(username: &str) -> bool {
-    username.eq_ignore_ascii_case("me")
-}
-
 #[cfg(test)]
 mod tests {
     use super::parse_github_ref;
@@ -132,14 +124,5 @@ mod tests {
     fn parse_github_ref_rejects_whitespace_and_path_chars() {
         assert!(parse_github_ref("github:alice bob").is_err());
         assert!(parse_github_ref("github:alice/../../etc/passwd").is_err());
-    }
-
-    #[test]
-    fn is_me_matches_case_insensitively() {
-        assert!(super::is_me("me"));
-        assert!(super::is_me("ME"));
-        assert!(super::is_me("Me"));
-        assert!(!super::is_me("myself"));
-        assert!(!super::is_me("alice"));
     }
 }

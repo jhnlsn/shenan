@@ -25,7 +25,7 @@ pub async fn run(
     let id = storage::load_identity()?.context("not initialized — run `shenan init` first")?;
 
     // Resolve "me" alias to the local GitHub username
-    let from_username = if is_me(from_raw) {
+    let from_username = if super::is_me(from_raw) {
         id.github_username.as_str()
     } else {
         from_raw
@@ -123,18 +123,4 @@ pub async fn run(
     );
 
     Ok(())
-}
-
-fn is_me(username: &str) -> bool {
-    username.eq_ignore_ascii_case("me")
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn github_me_resolves_to_own_username() {
-        assert!(super::is_me("me"));
-        assert!(super::is_me("ME"));
-        assert!(!super::is_me("alice"));
-    }
 }
