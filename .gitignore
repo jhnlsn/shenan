@@ -16,6 +16,9 @@
 *.swo
 *~
 
+# Worktrees
+.worktrees/
+
 # Local env/config files
 .env
 .env.*
