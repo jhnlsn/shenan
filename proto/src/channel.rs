@@ -128,4 +128,18 @@ mod tests {
         // Bob's key can't verify Alice's proof
         assert!(verify_proof(&bob.verifying_key(), &token, &proof).is_err());
     }
+
+    #[test]
+    fn self_send_derives_same_token_on_both_sides() {
+        let alice = SigningKey::generate(&mut OsRng);
+        let window = 123456u64;
+
+        // When sender == recipient (same key), both "sides" must derive the same token
+        let token_a = derive_token(&alice, &alice.verifying_key(), &alice.verifying_key(), window);
+        let token_b = derive_token(&alice, &alice.verifying_key(), &alice.verifying_key(), window);
+
+        // Token must be non-zero (self-DH is a valid, non-degenerate operation)
+        assert_ne!(*token_a, [0u8; 32]);
+        assert_eq!(*token_a, *token_b);
+    }
 }
