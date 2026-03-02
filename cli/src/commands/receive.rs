@@ -17,12 +17,19 @@ pub async fn run(
     overwrite: bool,
     relay_override: Option<String>,
 ) -> Result<()> {
-    let from_username = from
+    let from_raw = from
         .strip_prefix("github:")
         .ok_or_else(|| anyhow::anyhow!("--from must be in format github:<username>"))?;
 
     // Load local identity
     let id = storage::load_identity()?.context("not initialized — run `shenan init` first")?;
+
+    // Resolve "me" alias to the local GitHub username
+    let from_username = if is_me(from_raw) {
+        id.github_username.as_str()
+    } else {
+        from_raw
+    };
     let signing_key = identity::load_signing_key(&PathBuf::from(&id.ssh_key_path))?;
     let config = storage::load_config()?;
 
@@ -116,4 +123,18 @@ pub async fn run(
     );
 
     Ok(())
+}
+
+fn is_me(username: &str) -> bool {
+    username.eq_ignore_ascii_case("me")
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn github_me_resolves_to_own_username() {
+        assert!(super::is_me("me"));
+        assert!(super::is_me("ME"));
+        assert!(!super::is_me("alice"));
+    }
 }
