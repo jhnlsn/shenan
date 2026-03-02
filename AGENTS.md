@@ -11,6 +11,8 @@ cargo test --workspace           # Run all tests
 cargo test -p shenan-proto       # Test proto crate only
 cargo test -p shenan-relay       # Test relay crate only
 cargo clippy --all-targets       # Lint
+cargo fmt --all                  # Format
+cargo fmt --check --all          # Check formatting (run before every commit)
 ```
 
 ## Architecture
