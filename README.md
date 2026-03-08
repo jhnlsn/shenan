@@ -148,7 +148,10 @@ An attacker **cannot** determine who is talking to whom, what relationship exist
 ## Getting started
 
 ```bash
-# Install (macOS and Linux)
+# macOS (Homebrew)
+brew install jhnlsn/tap/shenan
+
+# Linux
 curl -fsSL https://raw.githubusercontent.com/jhnlsn/shenan/main/install.sh | sh
 
 # Or from source
