@@ -98,10 +98,9 @@ jobs:
       - name: Trigger homebrew-tap update
         env:
           TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           curl -fsSL -X POST \
             -H "Authorization: Bearer ${TAP_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
             https://api.github.com/repos/jhnlsn/homebrew-tap/dispatches \
-            -d "{\"event_type\":\"shenan-release\",\"client_payload\":{\"tag\":\"${RELEASE_TAG}\"}}"
+            -d "{\"event_type\":\"shenan-release\",\"client_payload\":{\"tag\":\"${{ github.ref_name }}\"}}"
