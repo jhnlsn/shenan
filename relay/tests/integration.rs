@@ -146,18 +146,6 @@ async fn read_text(stream: &mut WsStream) -> String {
     }
 }
 
-/// Read text, returning None if the connection was reset (for error-path tests).
-async fn try_read_text(stream: &mut WsStream) -> Option<String> {
-    loop {
-        match stream.next().await {
-            Some(Ok(Message::Text(t))) => return Some(t.to_string()),
-            Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => continue,
-            Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return None,
-            Some(Ok(_)) => return None,
-        }
-    }
-}
-
 async fn read_binary(stream: &mut WsStream) -> Vec<u8> {
     loop {
         match stream.next().await {
@@ -368,8 +356,8 @@ async fn auth_with_wrong_key_rejected() {
 }
 
 #[tokio::test]
-async fn same_pubkey_both_sides_rejected() {
-    // Alice tries to be both sender and receiver
+async fn same_pubkey_both_sides_allowed() {
+    // Alice sends to herself (self-send)
     let alice_key = SigningKey::generate(&mut OsRng);
     let alice_pub = alice_key.verifying_key();
 
@@ -397,8 +385,7 @@ async fn same_pubkey_both_sides_rejected() {
     .await;
     assert!(matches!(resp_a, wire::Message::Waiting { .. }));
 
-    // Second joins with same pubkey — should be rejected
-    // Send channel message manually since error may race with connection drop
+    // Second joins with same pubkey — should now be accepted (self-send)
     let token = channel::derive_token(&alice_key, &alice_pub, &alice_pub, window);
     let proof = channel::sign_token(&alice_key, &token);
     let my_pub_wire = ssh::ed25519_to_ssh_wire(&alice_key.verifying_key().to_bytes());
@@ -413,16 +400,11 @@ async fn same_pubkey_both_sides_rejected() {
         .await
         .unwrap();
 
-    let resp = try_read_text(&mut stream_b).await;
-    if let Some(resp) = resp {
-        match wire::Message::from_json(&resp).unwrap() {
-            wire::Message::Error { code, .. } => {
-                assert_eq!(code, wire::error_codes::AUTH_FAILED);
-            }
-            other => panic!("expected error for same pubkey, got: {other:?}"),
-        }
+    let resp = read_text(&mut stream_b).await;
+    match wire::Message::from_json(&resp).unwrap() {
+        wire::Message::Connected => {}
+        other => panic!("expected Connected for same-pubkey self-send, got: {other:?}"),
     }
-    // Connection may also just be reset for same-pubkey rejection
 }
 
 #[tokio::test]
@@ -943,4 +925,122 @@ async fn multi_key_send_receive_cycle() {
         wire::Message::from_json(&alice_ack).unwrap(),
         wire::Message::Received
     ));
+}
+
+#[tokio::test]
+async fn two_simultaneous_channels_dont_cross() {
+    // Alice↔Bob and Carol↔Dave form two independent pipes on the same relay concurrently.
+    // Each sender transmits a distinct payload; verify each receiver gets only their own payload.
+    let alice_key = SigningKey::generate(&mut OsRng);
+    let bob_key = SigningKey::generate(&mut OsRng);
+    let carol_key = SigningKey::generate(&mut OsRng);
+    let dave_key = SigningKey::generate(&mut OsRng);
+
+    let alice_pub = alice_key.verifying_key();
+    let bob_pub = bob_key.verifying_key();
+    let carol_pub = carol_key.verifying_key();
+    let dave_pub = dave_key.verifying_key();
+
+    let cache = test_cache(&[
+        ("alice", &alice_key),
+        ("bob", &bob_key),
+        ("carol", &carol_key),
+        ("dave", &dave_key),
+    ]);
+    let (addr, _handle) = shenan_relay::server::run_test(test_config(), cache)
+        .await
+        .unwrap();
+    let url = format!("ws://{addr}");
+
+    // Distinct payloads — different bytes so a mix-up is detectable.
+    let payload_ab: Vec<u8> = (0u8..=63).collect();
+    let payload_cd: Vec<u8> = (128u8..=191).collect();
+
+    let window = channel::current_window();
+
+    // Connect all four parties concurrently.
+    let (
+        (mut alice_sink, mut alice_stream),
+        (mut bob_sink, mut bob_stream),
+        (mut carol_sink, mut carol_stream),
+        (mut dave_sink, mut dave_stream),
+    ) = tokio::join!(
+        connect_and_auth(&url, &alice_key, "alice"),
+        connect_and_auth(&url, &bob_key, "bob"),
+        connect_and_auth(&url, &carol_key, "carol"),
+        connect_and_auth(&url, &dave_key, "dave"),
+    );
+
+    // Both pairs join their respective channels concurrently.
+    let (alice_resp, carol_resp) = tokio::join!(
+        send_channel_join(
+            &mut alice_sink,
+            &mut alice_stream,
+            &alice_key,
+            &alice_pub,
+            &bob_pub,
+            window,
+        ),
+        send_channel_join(
+            &mut carol_sink,
+            &mut carol_stream,
+            &carol_key,
+            &carol_pub,
+            &dave_pub,
+            window,
+        ),
+    );
+    assert!(matches!(alice_resp, wire::Message::Waiting { .. }));
+    assert!(matches!(carol_resp, wire::Message::Waiting { .. }));
+
+    // Second arrivals: Bob and Dave join concurrently, completing both pipes.
+    let (bob_resp, dave_resp) = tokio::join!(
+        send_channel_join(
+            &mut bob_sink,
+            &mut bob_stream,
+            &bob_key,
+            &alice_pub,
+            &bob_pub,
+            window,
+        ),
+        send_channel_join(
+            &mut dave_sink,
+            &mut dave_stream,
+            &dave_key,
+            &carol_pub,
+            &dave_pub,
+            window,
+        ),
+    );
+    assert!(matches!(bob_resp, wire::Message::Connected));
+    assert!(matches!(dave_resp, wire::Message::Connected));
+
+    // First arrivals also receive Connected.
+    let (alice_connected, carol_connected) =
+        tokio::join!(read_text(&mut alice_stream), read_text(&mut carol_stream),);
+    assert!(matches!(
+        wire::Message::from_json(&alice_connected).unwrap(),
+        wire::Message::Connected
+    ));
+    assert!(matches!(
+        wire::Message::from_json(&carol_connected).unwrap(),
+        wire::Message::Connected
+    ));
+
+    // Both senders transmit their payloads concurrently.
+    let (ab_send, cd_send) = tokio::join!(
+        alice_sink.send(Message::Binary(payload_ab.clone())),
+        carol_sink.send(Message::Binary(payload_cd.clone())),
+    );
+    ab_send.unwrap();
+    cd_send.unwrap();
+
+    // Both receivers read concurrently.
+    let (bob_data, dave_data) =
+        tokio::join!(read_binary(&mut bob_stream), read_binary(&mut dave_stream));
+
+    // No cross-contamination: each receiver gets exactly their sender's payload.
+    assert_eq!(bob_data, payload_ab, "Bob received wrong payload");
+    assert_eq!(dave_data, payload_cd, "Dave received wrong payload");
+    assert_ne!(bob_data, dave_data, "payloads must be distinct");
 }

@@ -1,7 +1,7 @@
 //! `shenan trust add/remove/list` — trusted senders management.
 
 use crate::storage::{self, TrustedSender};
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 /// Parse "github:<username>" format.
 fn parse_github_ref(s: &str) -> Result<String> {
@@ -42,8 +42,18 @@ fn is_valid_github_username(username: &str) -> bool {
     true
 }
 
+fn resolve_username(target: &str) -> Result<String> {
+    let raw = parse_github_ref(target)?;
+    if super::is_me(&raw) {
+        let id = storage::load_identity()?.context("not initialized — run `shenan init` first")?;
+        Ok(id.github_username.clone())
+    } else {
+        Ok(raw)
+    }
+}
+
 pub fn add(target: &str) -> Result<()> {
-    let username = parse_github_ref(target)?;
+    let username = resolve_username(target)?;
     let mut ts = storage::load_trusted_senders()?;
 
     if ts.senders.iter().any(|s| s.github == username) {
@@ -60,7 +70,7 @@ pub fn add(target: &str) -> Result<()> {
 }
 
 pub fn remove(target: &str) -> Result<()> {
-    let username = parse_github_ref(target)?;
+    let username = resolve_username(target)?;
     let mut ts = storage::load_trusted_senders()?;
 
     let before = ts.senders.len();

@@ -256,20 +256,6 @@ pub async fn handle_connection(
 
                         // Check for existing pending channel
                         if let Some((_, pending)) = state.pending_channels.remove(&token) {
-                            // Second arrival — admission check
-                            if admission::admission_check(&pending.pubkey, &pubkey_bytes_vec)
-                                .is_err()
-                            {
-                                // Same pubkey — drop both
-                                let _ = send_error(&tx, wire::error_codes::AUTH_FAILED, None);
-                                let _ = send_error(
-                                    &pending.sender,
-                                    wire::error_codes::AUTH_FAILED,
-                                    None,
-                                );
-                                break;
-                            }
-
                             // Open pipe — discard all channel state
                             let pipe_id = state.next_pipe_id();
                             let pipe = ActivePipe {
