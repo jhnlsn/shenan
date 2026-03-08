@@ -98,6 +98,10 @@ enum ConfigAction {
 
 #[tokio::main]
 async fn main() {
+    rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .expect("install rustls CryptoProvider");
+
     let cli = Cli::parse();
 
     let default_level = if cli.verbose { "debug" } else { "warn" };
