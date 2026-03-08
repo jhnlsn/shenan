@@ -94,3 +94,13 @@ jobs:
         with:
           files: artifacts/**
           generate_release_notes: true
+
+      - name: Trigger homebrew-tap update
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          curl -fsSL -X POST \
+            -H "Authorization: Bearer ${TAP_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/jhnlsn/homebrew-tap/dispatches \
+            -d "{\"event_type\":\"shenan-release\",\"client_payload\":{\"tag\":\"${{ github.ref_name }}\"}}"
