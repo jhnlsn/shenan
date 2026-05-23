@@ -54,11 +54,7 @@ pub async fn fan_out_sessions(
 
     let mut handles = Vec::with_capacity(counterpart_keys.len());
 
-    for (i, (key, payload)) in counterpart_keys
-        .iter()
-        .zip(payloads)
-        .enumerate()
-    {
+    for (i, (key, payload)) in counterpart_keys.iter().zip(payloads).enumerate() {
         let relay_url = relay_url.to_string();
         let signing_key = signing_key.clone();
         let my_github = my_github.to_string();
