@@ -27,6 +27,7 @@ fn test_config() -> RelayConfig {
         bind: "127.0.0.1:0".to_string(),
         tls_cert: None,
         tls_key: None,
+        allow_plaintext: true,
         admission_window: Duration::from_secs(30),
         session_expiry: Duration::from_secs(60),
         max_payload_size: 1024 * 1024,

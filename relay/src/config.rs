@@ -20,6 +20,10 @@ pub struct RelayArgs {
     #[arg(long, env = "SHENAN_TLS_KEY")]
     pub tls_key: Option<PathBuf>,
 
+    /// Allow plaintext WebSocket transport. Intended only for local development and tests.
+    #[arg(long, env = "SHENAN_ALLOW_PLAINTEXT")]
+    pub allow_plaintext: bool,
+
     /// Channel admission window in seconds.
     #[arg(long, default_value = "300", env = "SHENAN_ADMISSION_WINDOW")]
     pub admission_window: u64,
@@ -47,6 +51,7 @@ pub struct RelayConfig {
     pub bind: String,
     pub tls_cert: Option<PathBuf>,
     pub tls_key: Option<PathBuf>,
+    pub allow_plaintext: bool,
     pub admission_window: Duration,
     pub session_expiry: Duration,
     pub max_payload_size: usize,
@@ -60,11 +65,29 @@ impl From<RelayArgs> for RelayConfig {
             bind: args.bind,
             tls_cert: args.tls_cert,
             tls_key: args.tls_key,
+            allow_plaintext: args.allow_plaintext,
             admission_window: Duration::from_secs(args.admission_window),
             session_expiry: Duration::from_secs(args.session_expiry),
             max_payload_size: args.max_payload_size,
             rate_limit_auth: args.rate_limit_auth,
             log_level: args.log_level,
+        }
+    }
+}
+
+impl RelayConfig {
+    pub fn validate_runtime(&self) -> std::io::Result<()> {
+        match (&self.tls_cert, &self.tls_key) {
+            (Some(_), Some(_)) => Ok(()),
+            (None, None) if self.allow_plaintext => Ok(()),
+            (None, None) => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "TLS cert/key are required unless --allow-plaintext is set",
+            )),
+            _ => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "both TLS cert and TLS key must be provided together",
+            )),
         }
     }
 }
@@ -78,6 +101,7 @@ mod tests {
     fn relay_args_defaults_parse() {
         let args = RelayArgs::parse_from(["shenan-relay"]);
         assert_eq!(args.bind, "0.0.0.0:443");
+        assert!(!args.allow_plaintext);
         assert_eq!(args.admission_window, 300);
         assert_eq!(args.session_expiry, 600);
         assert_eq!(args.max_payload_size, 1_048_576);
@@ -104,6 +128,7 @@ mod tests {
 
         let cfg: RelayConfig = args.into();
         assert_eq!(cfg.bind, "127.0.0.1:9000");
+        assert!(!cfg.allow_plaintext);
         assert_eq!(cfg.admission_window, Duration::from_secs(5));
         assert_eq!(cfg.session_expiry, Duration::from_secs(7));
         assert_eq!(cfg.max_payload_size, 4096);
@@ -116,5 +141,14 @@ mod tests {
         let parsed =
             RelayArgs::try_parse_from(["shenan-relay", "--max-payload-size", "not-a-number"]);
         assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn runtime_validation_requires_tls_unless_plaintext_is_explicit() {
+        let cfg: RelayConfig = RelayArgs::parse_from(["shenan-relay"]).into();
+        assert!(cfg.validate_runtime().is_err());
+
+        let cfg: RelayConfig = RelayArgs::parse_from(["shenan-relay", "--allow-plaintext"]).into();
+        assert!(cfg.validate_runtime().is_ok());
     }
 }

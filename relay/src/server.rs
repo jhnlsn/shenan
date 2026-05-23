@@ -13,6 +13,8 @@ use crate::state::{RelayState, SharedState};
 
 /// Start the relay server.
 pub async fn run(config: RelayConfig) -> Result<(), Box<dyn std::error::Error>> {
+    config.validate_runtime()?;
+
     let state: SharedState = Arc::new(RelayState::new(config.clone()));
     let github_cache = Arc::new(GitHubKeyCache::new(Duration::from_secs(300)));
 
