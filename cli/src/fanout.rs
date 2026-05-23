@@ -56,7 +56,7 @@ pub async fn fan_out_sessions(
 
     for (i, (key, payload)) in counterpart_keys
         .iter()
-        .zip(payloads.into_iter())
+        .zip(payloads)
         .enumerate()
     {
         let relay_url = relay_url.to_string();
