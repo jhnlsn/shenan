@@ -52,9 +52,6 @@ pub async fn run(
         );
     }
 
-    // Collect all sender fingerprints for verification
-    let sender_fingerprints: Vec<String> = sender_keys.iter().map(|k| k.fingerprint()).collect();
-
     if sender_keys.len() > 1 {
         eprintln!(
             "Sender has {} Ed25519 keys — opening parallel channels...",
@@ -80,36 +77,18 @@ pub async fn run(
     )
     .await?;
 
-    let matched_key_index = result.key_index;
-
     if sender_verifying_keys.len() > 1 {
         eprintln!(
             "Matched sender key {}/{}.",
-            matched_key_index + 1,
+            result.key_index + 1,
             sender_verifying_keys.len()
         );
     }
 
-    let wire_payload = match result.result {
-        crate::session::SessionResult::Received(data) => data,
+    let payload = match result.result {
+        crate::session::SessionResult::Received(payload) => payload,
         _ => unreachable!(),
     };
-
-    // Decrypt
-    let payload = shenan_proto::payload::decrypt(&wire_payload, &signing_key)
-        .context("failed to decrypt payload — the sender may not have your correct public key")?;
-
-    // Verify sender fingerprint matches the exact key that won fan-out.
-    let expected_sender_fingerprint = &sender_fingerprints[matched_key_index];
-    if payload.sender_pubkey_fingerprint != *expected_sender_fingerprint {
-        anyhow::bail!(
-            "sender fingerprint mismatch: got {}, expected {} (matched key {}/{})",
-            payload.sender_pubkey_fingerprint,
-            expected_sender_fingerprint,
-            matched_key_index + 1,
-            sender_fingerprints.len()
-        );
-    }
 
     // Default output path is .env in the current directory
     let out_path = out.unwrap_or_else(|| PathBuf::from(".env"));
