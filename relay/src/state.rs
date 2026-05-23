@@ -37,6 +37,8 @@ pub struct PendingChannel {
 
 /// An active pipe (§8.3) — two sockets forwarding to each other.
 pub struct ActivePipe {
+    pub conn_id_a: ConnId,
+    pub conn_id_b: ConnId,
     pub sender_a: WsSender,
     pub sender_b: WsSender,
 }

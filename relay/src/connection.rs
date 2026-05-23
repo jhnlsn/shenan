@@ -242,23 +242,36 @@ pub async fn handle_connection(
                             }
                         };
 
-                        // Verify channel proof
-                        if admission::verify_channel_proof(&pubkey_32, &token_bytes, &proof_bytes)
-                            .is_err()
-                        {
-                            let _ = send_error(
-                                &tx,
-                                wire::error_codes::AUTH_FAILED,
-                                "invalid channel proof",
-                            );
-                            break;
-                        }
-
                         // Check for existing pending channel
                         if let Some((_, pending)) = state.pending_channels.remove(&token) {
+                            if admission::verify_channel_proof(
+                                &pubkey_32,
+                                &token_bytes,
+                                &proof_bytes,
+                            )
+                            .is_err()
+                            {
+                                let _ = send_error(
+                                    &tx,
+                                    wire::error_codes::AUTH_FAILED,
+                                    "invalid channel proof",
+                                );
+                                let _ = send_error(
+                                    &pending.sender,
+                                    wire::error_codes::AUTH_FAILED,
+                                    "invalid channel proof",
+                                );
+                                let _ = pending.sender.send(Message::Close(None));
+                                state.sessions.remove(&pending.conn_id);
+                                state.sessions.remove(&conn_id);
+                                break;
+                            }
+
                             // Open pipe — discard all channel state
                             let pipe_id = state.next_pipe_id();
                             let pipe = ActivePipe {
+                                conn_id_a: pending.conn_id,
+                                conn_id_b: conn_id,
                                 sender_a: pending.sender.clone(),
                                 sender_b: tx.clone(),
                             };
@@ -282,6 +295,22 @@ pub async fn handle_connection(
                             // Track pipe info for this (second) handler
                             pipe_info = Some((pipe_id, false));
                         } else {
+                            // Verify channel proof
+                            if admission::verify_channel_proof(
+                                &pubkey_32,
+                                &token_bytes,
+                                &proof_bytes,
+                            )
+                            .is_err()
+                            {
+                                let _ = send_error(
+                                    &tx,
+                                    wire::error_codes::AUTH_FAILED,
+                                    "invalid channel proof",
+                                );
+                                break;
+                            }
+
                             // First arrival
                             let pending = crate::state::PendingChannel {
                                 proof: proof_bytes,
@@ -368,6 +397,9 @@ pub async fn handle_connection(
 
     // Cleanup on disconnect
     state.sessions.remove(&conn_id);
+    state
+        .pending_channels
+        .retain(|_, pending| pending.conn_id != conn_id);
     state.pipe_assignments.remove(&conn_id);
     if let Some((pipe_id, _)) = pipe_info {
         crate::pipe::close_pipe(&state, pipe_id);
