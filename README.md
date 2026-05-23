@@ -26,7 +26,7 @@ Every team has the same moment: someone generates a production secret and now ha
 
 The centralized model has a deeper problem: stored ciphertext is harvestable. Even if it can't be decrypted today, a sufficiently motivated adversary stores it and waits. This is the **harvest now, decrypt later** attack, and it's not theoretical — it's happening now.
 
-Shenan is different in one specific way: **the relay is architecturally incapable of reading or retaining your secrets.** There is no database. There are no stored ciphertexts. The relay does not know who is talking to whom. By the time a secret has been transmitted, the relay has already forgotten everything about the transaction.
+Shenan is different in one specific way: **the relay is architecturally incapable of reading or retaining your secrets.** There is no database. There are no stored ciphertexts. The relay sheds GitHub identity after authentication and does not store a relationship graph. By the time a secret has been transmitted, channel-specific state has been deleted.
 
 ---
 
@@ -47,7 +47,7 @@ you                    relay                    colleague
  |<- ephemeral_id ------ |                          |
 ```
 
-After authentication, the relay knows nothing about your identity. It holds only an ephemeral ID linked to your socket connection.
+After authentication, the relay has discarded your GitHub username and public key. It keeps only anonymous session/routing metadata needed to finish the live socket operation.
 
 ### Channel derivation (client-side only)
 
@@ -103,15 +103,21 @@ The relay admits two connections presenting complementary proofs for the same ch
 Secrets never touch the relay as plaintext. Before sending:
 
 1. Sender fetches recipient's public key from `github.com/recipient.keys`
-2. Generates a fresh ephemeral keypair (forward secrecy)
+2. Generates a fresh ephemeral keypair for this send
 3. Encrypts the payload locally (X25519 + ChaCha20-Poly1305)
 4. Transmits ciphertext through the relay pipe
 
-The relay carries encrypted bytes it cannot read.
+The relay carries encrypted bytes it cannot read. The current payload
+construction does not provide forward secrecy against later compromise of the
+recipient's long-term SSH private key; Shenan's harvest-now/decrypt-later
+defense comes from the relay not storing ciphertext.
 
 ### Trust model
 
-Shenan maintains a local friends list at `~/.shenan/trusted_senders.toml`. Payloads from unknown senders are dropped silently before decryption. This prevents social engineering attacks even if the relay is compromised.
+Shenan maintains a local friends list at `~/.shenan/trusted_senders.toml`. The
+receiver refuses to listen for untrusted senders, and validates the decrypted
+sender fingerprint before acknowledging delivery. This prevents social
+engineering attacks even if the relay is compromised.
 
 ```bash
 shenan trust add github:alice
@@ -125,13 +131,13 @@ shenan trust list
 | Property | Guarantee |
 |---|---|
 | Encryption | End-to-end, client-side only |
-| Forward secrecy | Fresh ephemeral keypair per send |
-| Relay knowledge | Anonymous ephemeral IDs only |
+| Payload key separation | Fresh ephemeral keypair per send; no forward secrecy against later recipient-key compromise |
+| Relay knowledge | Anonymous routing/session metadata only |
 | Relationship graph | Never constructed, never stored |
 | Ciphertext at rest | Structurally impossible |
 | Harvest now / decrypt later | No surface to harvest |
 | Post-quantum readiness | Hybrid X25519 + ML-KEM (roadmap) |
-| Relay compromise impact | Zero — nothing to learn, nothing to steal |
+| Relay compromise impact | Cannot read payloads; can observe live timing, source IPs, rate-limit state, and active routing metadata |
 
 ### What a fully compromised relay reveals
 
@@ -140,8 +146,11 @@ Even with complete real-time memory access an attacker sees:
 - Some number of verified GitHub users are currently connected
 - Some of those are paired on anonymous channels
 - Opaque encrypted bytes flowing through those channels
+- Source IPs and recent auth-attempt timestamps for rate limiting
 
-An attacker **cannot** determine who is talking to whom, what relationship exists between any two parties, what the bytes contain, or anything useful for a harvest-now-decrypt-later attack.
+An attacker **cannot** determine which GitHub username corresponds to a
+post-authentication connection, what the bytes contain, or anything useful from
+relay storage for a harvest-now-decrypt-later attack.
 
 ---
 
@@ -218,6 +227,7 @@ All relay options can be configured via environment variables:
 | `--bind` | `SHENAN_BIND` |
 | `--tls-cert` | `SHENAN_TLS_CERT` |
 | `--tls-key` | `SHENAN_TLS_KEY` |
+| `--allow-plaintext` | `SHENAN_ALLOW_PLAINTEXT` |
 | `--log-level` | `SHENAN_LOG` |
 | `--admission-window` | `SHENAN_ADMISSION_WINDOW` |
 | `--session-expiry` | `SHENAN_SESSION_EXPIRY` |

@@ -151,8 +151,6 @@ pub async fn handle_connection(
                         // §6.6: discard username and pubkey, mark connection as authenticated
                         let session = AuthenticatedSession {
                             expires_at: Instant::now() + state.config.session_expiry,
-                            sender: tx.clone(),
-                            peer_addr,
                         };
                         state.sessions.insert(conn_id, session);
 
@@ -313,8 +311,6 @@ pub async fn handle_connection(
 
                             // First arrival
                             let pending = crate::state::PendingChannel {
-                                proof: proof_bytes,
-                                pubkey: pubkey_bytes_vec,
                                 conn_id,
                                 sender: tx.clone(),
                                 arrived_at: Instant::now(),

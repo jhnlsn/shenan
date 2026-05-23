@@ -65,22 +65,17 @@ mod tests {
     fn sweep_removes_expired_session_and_pending_channel() {
         let state = make_state();
         let (tx, _rx) = mpsc::unbounded_channel::<Message>();
-        let addr: SocketAddr = "127.0.0.1:1234".parse().unwrap();
 
         state.sessions.insert(
             1,
             AuthenticatedSession {
                 expires_at: Instant::now() - Duration::from_secs(1),
-                sender: tx.clone(),
-                peer_addr: addr,
             },
         );
 
         state.pending_channels.insert(
             "token".into(),
             PendingChannel {
-                proof: vec![1; 64],
-                pubkey: vec![2; 32],
                 conn_id: 1,
                 sender: tx,
                 arrived_at: Instant::now() - Duration::from_secs(10),

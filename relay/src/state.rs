@@ -18,18 +18,12 @@ pub type WsSender = mpsc::UnboundedSender<Message>;
 
 /// An authenticated session (§6.6).
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct AuthenticatedSession {
     pub expires_at: Instant,
-    pub sender: WsSender,
-    pub peer_addr: SocketAddr,
 }
 
 /// A pending channel entry (§8.1) — first party waiting for second.
-#[allow(dead_code)]
 pub struct PendingChannel {
-    pub proof: Vec<u8>,
-    pub pubkey: Vec<u8>, // raw Ed25519 public key bytes (32)
     pub conn_id: ConnId,
     pub sender: WsSender,
     pub arrived_at: Instant,
@@ -46,7 +40,7 @@ pub struct ActivePipe {
 /// Pipe assignment for a connection: (pipe_id, is_side_a).
 pub type PipeAssignment = (u64, bool);
 
-/// The complete relay state. This is the *only* state the relay holds.
+/// Relay state. Keep this structure aligned with SPEC §8.4.
 pub struct RelayState {
     /// Authenticated connections: conn_id → session
     pub sessions: DashMap<ConnId, AuthenticatedSession>,
