@@ -46,7 +46,9 @@ impl Payload {
 
 /// Encrypt a payload for a recipient (§9.2).
 ///
-/// Generates a fresh ephemeral X25519 keypair for forward secrecy.
+/// Generates a fresh ephemeral X25519 keypair for this send. This prevents
+/// nonce/key reuse, but does not provide forward secrecy against later
+/// compromise of the recipient's long-term SSH private key.
 /// Returns the wire payload: `ephemeral_pub(32) || nonce(12) || ciphertext`.
 pub fn encrypt(payload: &Payload, recipient_pubkey: &VerifyingKey) -> Result<Vec<u8>, ProtoError> {
     let plaintext = serde_json::to_vec(payload)?;

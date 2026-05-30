@@ -35,10 +35,12 @@ Shenan is a protocol for securely sharing secrets between developers using exist
 
 ### Relay state model (SPEC §8.4)
 
-The relay holds exactly three maps in memory — nothing else:
-- `sessions`: conn_id → {expires_at, sender} (no identity)
-- `pending_channels`: token → {proof, pubkey, socket, arrived_at} (max 5 min)
-- `active_pipes`: pipe_id → {socket_a, socket_b} (no identity, deleted on close)
+The relay holds only the in-memory state documented in SPEC §8.4:
+- `sessions`: conn_id → {expires_at} (no identity)
+- `pending_channels`: token → {socket, arrived_at} (max 5 min)
+- `active_pipes`: pipe_id → {conn_id_a, conn_id_b, socket_a, socket_b} (no identity, deleted on close)
+- `pipe_assignments`: conn_id → {pipe_id, is_side_a} (routing metadata, deleted on close)
+- `rate_limits`: source_ip → recent auth attempt timestamps (abuse-prevention metadata)
 
 ### Crypto stack (all in `proto/src/crypto/`)
 

@@ -1,0 +1,886 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AWS ECS Aurora Deployment Visualization</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --page: #f4f6fa;
+      --ink: #1f2937;
+      --muted: #64748b;
+      --line: #cbd5e1;
+      --panel: #ffffff;
+      --orange: #f59e0b;
+      --orange-bg: #fff6df;
+      --blue: #2563eb;
+      --blue-bg: #eaf2ff;
+      --green: #15803d;
+      --green-bg: #eaf8ef;
+      --purple: #7c3aed;
+      --purple-bg: #f3edff;
+      --gray-bg: #f8fafc;
+      --shadow: 0 18px 48px rgba(38, 56, 77, 0.14);
+      --soft-shadow: 0 10px 26px rgba(38, 56, 77, 0.10);
+      --radius: 8px;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+      letter-spacing: 0;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      background: var(--page);
+    }
+
+    button {
+      font: inherit;
+    }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+      padding: 22px 28px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.92);
+      backdrop-filter: blur(14px);
+      position: sticky;
+      top: 0;
+      z-index: 20;
+    }
+
+    .title-block {
+      min-width: 280px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 24px;
+      line-height: 1.18;
+      font-weight: 760;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.35;
+    }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .segmented {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      border: 1px solid #b9c4d2;
+      background: #eef2f7;
+      border-radius: var(--radius);
+      padding: 3px;
+    }
+
+    .mode-button {
+      border: 0;
+      border-radius: 6px;
+      padding: 9px 13px;
+      color: #475569;
+      background: transparent;
+      cursor: pointer;
+      min-width: 142px;
+      font-size: 13px;
+      font-weight: 720;
+      letter-spacing: 0;
+    }
+
+    .mode-button[aria-pressed="true"] {
+      color: #111827;
+      background: #ffffff;
+      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.18);
+    }
+
+    .path-pill {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      min-height: 38px;
+      border: 1px solid #cfd8e3;
+      background: #ffffff;
+      border-radius: var(--radius);
+      padding: 8px 12px;
+      color: #334155;
+      font-size: 13px;
+      font-weight: 660;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+      white-space: nowrap;
+    }
+
+    .path-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--blue);
+    }
+
+    body[data-mode="private"] .path-dot {
+      background: var(--purple);
+    }
+
+    .workspace {
+      padding: 24px;
+      overflow: hidden;
+    }
+
+    .canvas-shell {
+      height: calc(100vh - 116px);
+      min-height: 740px;
+      overflow: auto;
+      border: 1px solid #cdd7e3;
+      background:
+        linear-gradient(#eef3f8 1px, transparent 1px),
+        linear-gradient(90deg, #eef3f8 1px, transparent 1px),
+        #ffffff;
+      background-size: 28px 28px;
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+
+    .stage-frame {
+      width: 1850px;
+      height: 970px;
+      padding: 0;
+    }
+
+    .stage {
+      position: relative;
+      width: 1850px;
+      height: 970px;
+      overflow: hidden;
+    }
+
+    .boundary,
+    .zone,
+    .node,
+    .callout,
+    .legend {
+      position: absolute;
+      border-radius: var(--radius);
+    }
+
+    .boundary {
+      border: 2px solid #b7c4d4;
+      background: rgba(255, 255, 255, 0.72);
+    }
+
+    .boundary.vpc {
+      border-color: #74a4d8;
+      background: rgba(244, 249, 255, 0.86);
+    }
+
+    .boundary-title {
+      position: absolute;
+      left: 22px;
+      top: 18px;
+      font-size: 17px;
+      font-weight: 780;
+      color: #243244;
+      letter-spacing: 0;
+    }
+
+    .boundary-note {
+      position: absolute;
+      left: 22px;
+      top: 44px;
+      font-size: 12px;
+      color: var(--muted);
+      letter-spacing: 0;
+    }
+
+    .zone {
+      border: 1.5px solid;
+      padding: 18px;
+    }
+
+    .zone-title {
+      font-size: 14px;
+      font-weight: 780;
+      color: #334155;
+      letter-spacing: 0;
+    }
+
+    .zone-note {
+      margin-top: 4px;
+      font-size: 11px;
+      color: var(--muted);
+      letter-spacing: 0;
+    }
+
+    .zone.ingress {
+      border-color: #e2a032;
+      background: rgba(255, 246, 223, 0.9);
+    }
+
+    .zone.public-subnets {
+      border-color: #e2a032;
+      background: rgba(255, 246, 223, 0.84);
+    }
+
+    .zone.app-subnets {
+      border-color: #66ad79;
+      background: rgba(234, 248, 239, 0.9);
+    }
+
+    .zone.db-subnets {
+      border-color: #a78bfa;
+      background: rgba(243, 237, 255, 0.92);
+    }
+
+    .node {
+      left: var(--x);
+      top: var(--y);
+      width: var(--w);
+      min-height: var(--h);
+      display: grid;
+      grid-template-columns: 42px 1fr;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 15px;
+      border: 1.5px solid #d6dee8;
+      background: var(--panel);
+      box-shadow: var(--soft-shadow);
+      transition: opacity 180ms ease, transform 180ms ease, filter 180ms ease, border-color 180ms ease;
+    }
+
+    .node:hover {
+      transform: translateY(-2px);
+      border-color: #94a3b8;
+    }
+
+    .node.compact {
+      grid-template-columns: 34px 1fr;
+      gap: 9px;
+      padding: 11px 12px;
+      box-shadow: 0 6px 18px rgba(38, 56, 77, 0.08);
+    }
+
+    .node.shared {
+      border-color: #c9d4e2;
+    }
+
+    .node.public {
+      border-color: #e2a032;
+    }
+
+    .node.private {
+      border-color: #a78bfa;
+    }
+
+    .node.compute {
+      border-color: #66ad79;
+    }
+
+    .node.database {
+      border-color: #a78bfa;
+    }
+
+    .node.ops {
+      border-color: #a3afbf;
+      box-shadow: 0 8px 18px rgba(38, 56, 77, 0.08);
+    }
+
+    .node strong {
+      display: block;
+      font-size: 14px;
+      line-height: 1.2;
+      letter-spacing: 0;
+      overflow-wrap: break-word;
+    }
+
+    .node span {
+      display: block;
+      margin-top: 3px;
+      font-size: 11px;
+      line-height: 1.25;
+      color: var(--muted);
+      letter-spacing: 0;
+      overflow-wrap: break-word;
+    }
+
+    .node > div:last-child {
+      min-width: 0;
+    }
+
+    .node strong .inline-kind {
+      display: inline;
+      margin: 0;
+      color: inherit;
+      font-size: inherit;
+      line-height: inherit;
+    }
+
+    .glyph {
+      width: 42px;
+      height: 42px;
+      display: grid;
+      place-items: center;
+      border-radius: 8px;
+      color: #1f2937;
+      font-size: 13px;
+      font-weight: 780;
+      letter-spacing: 0;
+      border: 1px solid;
+    }
+
+    .compact .glyph {
+      width: 34px;
+      height: 34px;
+      font-size: 11px;
+    }
+
+    .g-public {
+      background: var(--orange-bg);
+      border-color: #dfa23a;
+    }
+
+    .g-private {
+      background: var(--purple-bg);
+      border-color: #a78bfa;
+    }
+
+    .g-network {
+      background: var(--blue-bg);
+      border-color: #6aa6ef;
+    }
+
+    .g-compute {
+      background: var(--green-bg);
+      border-color: #66ad79;
+    }
+
+    .g-db {
+      background: var(--purple-bg);
+      border-color: #a78bfa;
+    }
+
+    .g-ops {
+      background: var(--gray-bg);
+      border-color: #a3afbf;
+    }
+
+    .security-shell {
+      position: absolute;
+      border: 1.5px dashed #90a1b7;
+      border-radius: var(--radius);
+      background: rgba(248, 250, 252, 0.58);
+    }
+
+    .security-shell .shell-title {
+      position: absolute;
+      left: 13px;
+      top: 10px;
+      font-size: 11px;
+      font-weight: 780;
+      color: #475569;
+      letter-spacing: 0;
+    }
+
+    .callout {
+      border: 1px solid #cfd8e3;
+      background: #ffffff;
+      box-shadow: 0 8px 20px rgba(38, 56, 77, 0.08);
+      padding: 12px 14px;
+    }
+
+    .callout strong {
+      display: block;
+      font-size: 12px;
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+
+    .callout span {
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.3;
+      letter-spacing: 0;
+    }
+
+    .legend {
+      left: 1390px;
+      top: 45px;
+      width: 360px;
+      display: flex;
+      gap: 14px;
+      align-items: center;
+      padding: 11px 13px;
+      border: 1px solid #cfd8e3;
+      background: rgba(255, 255, 255, 0.95);
+      box-shadow: 0 8px 20px rgba(38, 56, 77, 0.07);
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      color: #475569;
+      font-size: 11px;
+      white-space: nowrap;
+      letter-spacing: 0;
+    }
+
+    .legend-line {
+      width: 32px;
+      height: 0;
+      border-top: 3px solid #334155;
+    }
+
+    .legend-line.private {
+      border-top-color: var(--purple);
+    }
+
+    .legend-line.dependency {
+      border-top-style: dashed;
+      border-top-color: #64748b;
+    }
+
+    .connector-layer {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      overflow: visible;
+    }
+
+    .connector {
+      fill: none;
+      stroke: #334155;
+      stroke-width: 3.2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      marker-end: url(#arrow-dark);
+      transition: opacity 180ms ease, stroke 180ms ease;
+    }
+
+    .connector.public {
+      stroke: var(--blue);
+      marker-end: url(#arrow-blue);
+    }
+
+    .connector.private {
+      stroke: var(--purple);
+      marker-end: url(#arrow-purple);
+    }
+
+    .connector.data {
+      stroke: var(--green);
+      marker-end: url(#arrow-green);
+    }
+
+    .connector.dependency {
+      stroke: #64748b;
+      stroke-width: 2.1;
+      stroke-dasharray: 7 7;
+      marker-end: url(#arrow-gray);
+    }
+
+    .connector-label {
+      font-size: 11px;
+      font-weight: 720;
+      fill: #475569;
+      letter-spacing: 0;
+      paint-order: stroke;
+      stroke: #ffffff;
+      stroke-width: 4px;
+      stroke-linejoin: round;
+    }
+
+    body[data-mode="public"] .mode-private,
+    body[data-mode="public"] .connector.private,
+    body[data-mode="private"] .mode-public,
+    body[data-mode="private"] .connector.public {
+      opacity: 0.18;
+      filter: grayscale(0.55);
+    }
+
+    body[data-mode="public"] .mode-private.node:hover,
+    body[data-mode="private"] .mode-public.node:hover {
+      opacity: 0.42;
+    }
+
+    .platform {
+      position: absolute;
+      left: 810px;
+      top: 810px;
+      width: 940px;
+      height: 100px;
+      border: 1.5px solid #cbd5e1;
+      background: rgba(255, 255, 255, 0.86);
+      border-radius: var(--radius);
+    }
+
+    .platform-title {
+      position: absolute;
+      left: 22px;
+      top: 18px;
+      font-size: 14px;
+      font-weight: 780;
+      letter-spacing: 0;
+    }
+
+    .platform-note {
+      position: absolute;
+      left: 22px;
+      top: 42px;
+      color: var(--muted);
+      font-size: 11px;
+      letter-spacing: 0;
+    }
+
+    @media (max-width: 820px) {
+      .topbar {
+        align-items: flex-start;
+        flex-direction: column;
+        padding: 18px;
+      }
+
+      .toolbar {
+        width: 100%;
+        justify-content: flex-start;
+      }
+
+      .segmented {
+        width: 100%;
+      }
+
+      .mode-button {
+        min-width: 0;
+      }
+
+      .path-pill {
+        width: 100%;
+        white-space: normal;
+      }
+
+      .workspace {
+        padding: 14px;
+      }
+
+      .canvas-shell {
+        height: calc(100vh - 180px);
+        min-height: 620px;
+      }
+    }
+  </style>
+</head>
+<body data-mode="public">
+  <div class="app">
+    <header class="topbar">
+      <div class="title-block">
+        <h1>AWS ECS Aurora Deployment</h1>
+        <div class="subtitle">Gateway ingress, private ECS compute, and isolated Aurora persistence.</div>
+      </div>
+      <div class="toolbar">
+        <div class="segmented" role="group" aria-label="Gateway mode">
+          <button class="mode-button" type="button" data-mode-button="public" aria-pressed="true">Public gateway</button>
+          <button class="mode-button" type="button" data-mode-button="private" aria-pressed="false">Private gateway</button>
+        </div>
+        <div class="path-pill" aria-live="polite">
+          <span class="path-dot" aria-hidden="true"></span>
+          <span id="path-summary">Users -> Route 53 -> WAF -> API Gateway -> Load Balancer -> ECS -> Aurora</span>
+        </div>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <section class="canvas-shell" aria-label="AWS ECS Aurora architecture visualization">
+        <div class="stage-frame">
+          <div class="stage">
+            <svg class="connector-layer" viewBox="0 0 1850 970" aria-hidden="true">
+              <defs>
+                <marker id="arrow-dark" markerWidth="12" markerHeight="12" refX="10.5" refY="6" orient="auto">
+                  <path d="M 1 1 L 11 6 L 1 11 Z" fill="#334155"></path>
+                </marker>
+                <marker id="arrow-blue" markerWidth="12" markerHeight="12" refX="10.5" refY="6" orient="auto">
+                  <path d="M 1 1 L 11 6 L 1 11 Z" fill="#2563eb"></path>
+                </marker>
+                <marker id="arrow-purple" markerWidth="12" markerHeight="12" refX="10.5" refY="6" orient="auto">
+                  <path d="M 1 1 L 11 6 L 1 11 Z" fill="#7c3aed"></path>
+                </marker>
+                <marker id="arrow-green" markerWidth="12" markerHeight="12" refX="10.5" refY="6" orient="auto">
+                  <path d="M 1 1 L 11 6 L 1 11 Z" fill="#15803d"></path>
+                </marker>
+                <marker id="arrow-gray" markerWidth="12" markerHeight="12" refX="10.5" refY="6" orient="auto">
+                  <path d="M 1 1 L 11 6 L 1 11 Z" fill="#64748b"></path>
+                </marker>
+              </defs>
+
+              <path class="connector public" d="M 218 340 C 266 340 286 290 332 290"></path>
+              <path class="connector public" d="M 520 330 V 358"></path>
+              <path class="connector public" d="M 520 438 V 466"></path>
+              <path class="connector public" d="M 708 509 C 760 509 790 446 850 446"></path>
+              <path class="connector public" d="M 1070 446 H 1188"></path>
+
+              <path class="connector private" d="M 218 610 H 332"></path>
+              <path class="connector private" d="M 522 614 H 552"></path>
+              <path class="connector private" d="M 742 614 H 850"></path>
+              <path class="connector private" d="M 945 574 V 488"></path>
+
+              <path class="connector" d="M 1428 426 H 1532"></path>
+              <path class="connector" d="M 1280 468 C 1280 494 1270 494 1270 512"></path>
+              <path class="connector" d="M 1360 468 C 1360 494 1380 494 1380 512"></path>
+              <path class="connector data" d="M 1270 574 C 1270 668 1450 676 1532 526"></path>
+              <path class="connector data" d="M 1380 574 C 1425 620 1480 625 1532 500"></path>
+
+              <path class="connector dependency" d="M 1125 810 C 1125 735 1238 668 1270 574"></path>
+              <path class="connector dependency" d="M 1370 810 C 1370 724 1356 654 1400 574"></path>
+              <path class="connector dependency" d="M 1615 810 C 1615 728 1485 660 1380 574"></path>
+
+              <text class="connector-label mode-public" x="730" y="450">VPC Link</text>
+              <text class="connector-label mode-private" x="764" y="606">PrivateLink</text>
+              <text class="connector-label" x="1088" y="437">target group</text>
+              <text class="connector-label" x="1390" y="666">database connection</text>
+            </svg>
+
+            <div class="boundary" style="left: 255px; top: 80px; width: 1545px; height: 850px;">
+              <div class="boundary-title">AWS Account</div>
+              <div class="boundary-note">Managed gateway services, VPC networking, container compute, and persistence.</div>
+            </div>
+
+            <div class="boundary vpc" style="left: 810px; top: 130px; width: 940px; height: 640px;">
+              <div class="boundary-title">Application VPC</div>
+              <div class="boundary-note">Only ingress targets are reachable from the gateway; ECS and Aurora remain private.</div>
+            </div>
+
+            <div class="legend">
+              <div class="legend-item"><span class="legend-line"></span>shared</div>
+              <div class="legend-item"><span class="legend-line private"></span>private</div>
+              <div class="legend-item"><span class="legend-line dependency"></span>runtime</div>
+            </div>
+
+            <div class="zone ingress" style="left: 290px; top: 145px; width: 470px; height: 625px;">
+              <div class="zone-title">Gateway Layer</div>
+              <div class="zone-note">Public and private ingress options.</div>
+            </div>
+
+            <div class="zone public-subnets" style="left: 840px; top: 220px; width: 270px; height: 448px;">
+              <div class="zone-title">Ingress Subnets</div>
+              <div class="zone-note">load balancer and VPC Link targets</div>
+            </div>
+
+            <div class="zone app-subnets" style="left: 1140px; top: 220px; width: 320px; height: 448px;">
+              <div class="zone-title">Private App Subnets</div>
+              <div class="zone-note">ECS tasks without public IPs</div>
+            </div>
+
+            <div class="zone db-subnets" style="left: 1490px; top: 220px; width: 230px; height: 448px;">
+              <div class="zone-title">Private DB Subnets</div>
+              <div class="zone-note">Aurora cluster isolated by DB SG</div>
+            </div>
+
+            <div class="node shared" style="--x: 48px; --y: 289px; --w: 170px; --h: 102px;">
+              <div class="glyph g-network">USER</div>
+              <div>
+                <strong>Internet users</strong>
+                <span>browser, mobile, external API clients</span>
+              </div>
+            </div>
+
+            <div class="node private mode-private" style="--x: 48px; --y: 559px; --w: 170px; --h: 102px;">
+              <div class="glyph g-private">VPN</div>
+              <div>
+                <strong>Private clients</strong>
+                <span>VPC, VPN, Direct Connect, or corporate network</span>
+              </div>
+            </div>
+
+            <div class="node public mode-public" style="--x: 332px; --y: 250px; --w: 376px; --h: 80px;">
+              <div class="glyph g-public">53</div>
+              <div>
+                <strong>Route 53</strong>
+                <span>DNS for public API hostname</span>
+              </div>
+            </div>
+
+            <div class="node public mode-public" style="--x: 332px; --y: 358px; --w: 376px; --h: 80px;">
+              <div class="glyph g-public">WAF</div>
+              <div>
+                <strong>AWS WAF</strong>
+                <span>managed request filtering</span>
+              </div>
+            </div>
+
+            <div class="node public mode-public" style="--x: 332px; --y: 466px; --w: 376px; --h: 86px;">
+              <div class="glyph g-public">API</div>
+              <div>
+                <strong>Public API Gateway</strong>
+                <span>regional or edge-optimized endpoint</span>
+              </div>
+            </div>
+
+            <div class="node private mode-private" style="--x: 332px; --y: 568px; --w: 190px; --h: 92px;">
+              <div class="glyph g-private">ENI</div>
+              <div>
+                <strong>Interface endpoint</strong>
+                <span>VPC-only entry</span>
+              </div>
+            </div>
+
+            <div class="node private mode-private" style="--x: 552px; --y: 568px; --w: 190px; --h: 92px;">
+              <div class="glyph g-private">API</div>
+              <div>
+                <strong>Private REST API</strong>
+                <span>not internet-routable</span>
+              </div>
+            </div>
+
+            <div class="node shared" style="--x: 850px; --y: 404px; --w: 220px; --h: 84px;">
+              <div class="glyph g-network">LB</div>
+              <div>
+                <strong><span id="lb-kind" class="inline-kind">Internet-facing</span> load balancer</strong>
+                <span>forwards to ECS targets</span>
+              </div>
+            </div>
+
+            <div class="node private mode-private compact" style="--x: 850px; --y: 574px; --w: 190px; --h: 84px;">
+              <div class="glyph g-private">VL</div>
+              <div>
+                <strong>VPC Link</strong>
+                <span>private integration</span>
+              </div>
+            </div>
+
+            <div class="security-shell" style="left: 1180px; top: 328px; width: 260px; height: 298px;">
+              <div class="shell-title">ECS security group</div>
+            </div>
+
+            <div class="node compute" style="--x: 1188px; --y: 384px; --w: 240px; --h: 84px;">
+              <div class="glyph g-compute">ECS</div>
+              <div>
+                <strong>ECS Service</strong>
+                <span>desired count, target group, deployments</span>
+              </div>
+            </div>
+
+            <div class="node compute compact" style="--x: 1210px; --y: 512px; --w: 120px; --h: 62px;">
+              <div class="glyph g-compute">T1</div>
+              <div>
+                <strong>Task A</strong>
+                <span>Fargate</span>
+              </div>
+            </div>
+
+            <div class="node compute compact" style="--x: 1320px; --y: 512px; --w: 120px; --h: 62px;">
+              <div class="glyph g-compute">T2</div>
+              <div>
+                <strong>Task B</strong>
+                <span>Fargate</span>
+              </div>
+            </div>
+
+            <div class="security-shell" style="left: 1518px; top: 352px; width: 180px; height: 232px;">
+              <div class="shell-title">Aurora security group</div>
+            </div>
+
+            <div class="node database" style="--x: 1532px; --y: 414px; --w: 160px; --h: 142px;">
+              <div class="glyph g-db">DB</div>
+              <div>
+                <strong>Aurora cluster</strong>
+                <span>writer and readers in private DB subnets</span>
+              </div>
+            </div>
+
+            <div class="callout" style="left: 850px; top: 690px; width: 430px;">
+              <strong>Ingress rule</strong>
+              <span>The load balancer accepts traffic from API Gateway or its VPC Link path, not directly from application users.</span>
+            </div>
+
+            <div class="callout" style="left: 1310px; top: 690px; width: 390px;">
+              <strong>Database rule</strong>
+              <span>Aurora accepts connections from the ECS security group only; database subnets stay private.</span>
+            </div>
+
+            <div class="platform">
+              <div class="platform-title">Platform Services</div>
+              <div class="platform-note">Used by ECS during deployment and runtime.</div>
+            </div>
+
+            <div class="node ops compact" style="--x: 1030px; --y: 830px; --w: 190px; --h: 58px;">
+              <div class="glyph g-ops">ECR</div>
+              <div>
+                <strong>Amazon ECR</strong>
+                <span>container images</span>
+              </div>
+            </div>
+
+            <div class="node ops compact" style="--x: 1260px; --y: 830px; --w: 220px; --h: 58px;">
+              <div class="glyph g-ops">SEC</div>
+              <div>
+                <strong>Secrets Manager</strong>
+                <span>database credentials</span>
+              </div>
+            </div>
+
+            <div class="node ops compact" style="--x: 1520px; --y: 830px; --w: 190px; --h: 58px;">
+              <div class="glyph g-ops">LOG</div>
+              <div>
+                <strong>CloudWatch</strong>
+                <span>logs and metrics</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const summaries = {
+      public: "Users -> Route 53 -> WAF -> API Gateway -> Load Balancer -> ECS -> Aurora",
+      private: "Private clients -> Interface Endpoint -> Private REST API -> VPC Link -> Internal LB -> ECS -> Aurora"
+    };
+
+    const loadBalancerKinds = {
+      public: "Internet-facing",
+      private: "Internal"
+    };
+
+    const buttons = Array.from(document.querySelectorAll("[data-mode-button]"));
+    const pathSummary = document.getElementById("path-summary");
+    const lbKind = document.getElementById("lb-kind");
+
+    function setMode(mode) {
+      document.body.dataset.mode = mode;
+      pathSummary.textContent = summaries[mode];
+      lbKind.textContent = loadBalancerKinds[mode];
+      buttons.forEach((button) => {
+        const active = button.dataset.modeButton === mode;
+        button.setAttribute("aria-pressed", String(active));
+      });
+    }
+
+    buttons.forEach((button) => {
+      button.addEventListener("click", () => setMode(button.dataset.modeButton));
+    });
+  </script>
+</body>
+</html>

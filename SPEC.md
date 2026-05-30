@@ -45,7 +45,7 @@ A conforming Shenan relay:
 
 These are not aspirational goals — they are verifiable architectural constraints. A conforming relay has no code path that stores, logs, or inspects payload content. Security guarantees are **structural**, not operational — they are enforced by what code exists, not by policy. An auditor can verify them by reading the source, not by trusting a document.
 
-**Caveat:** During authentication (§6), the relay necessarily learns the client's GitHub username and public key in order to verify identity. A conforming relay discards this information immediately after verification. The structural guarantee begins *after* authentication — from that point forward, the relay holds no identity information, only anonymous authenticated connections and bare public keys (during the brief channel admission window) with no username attached.
+**Caveat:** During authentication (§6), the relay necessarily learns the client's GitHub username and public key in order to verify identity. A conforming relay discards this information immediately after verification. During channel admission (§7.4), the relay also sees each joining client's public key long enough to verify the channel proof, then discards it. The structural guarantee begins *after* those verification steps: from that point forward, the relay holds no identity information.
 
 ---
 
@@ -253,7 +253,7 @@ The relay identifies the client by its WebSocket connection, not by a bearer tok
 1. Checks that the connection corresponds to an authenticated session
 2. Checks that no pending channel entry exists for this `channel_token`
 3. Verifies `channel_proof` is a valid signature over `SHA256(channel_token)` using the provided `pubkey`
-4. Stores: `{ channel_token -> { proof, pubkey_1, socket, arrived_at } }`
+4. Stores: `{ channel_token -> { socket, arrived_at } }`
 
 **On second arrival**, the relay:
 
@@ -267,10 +267,10 @@ The relay identifies the client by its WebSocket connection, not by a bearer tok
 
 The channel token includes a Diffie-Hellman shared secret (§7.2) that only the two legitimate parties can compute. This makes the token unguessable by third parties, preventing channel squatting at the derivation level. The relay does not need to re-derive the token — the cryptographic properties of the derivation ensure that only the correct parties can produce a matching token and a valid proof over it.
 
-5. If all checks pass: open bidirectional pipe, immediately discard all channel state (token, both proofs, both pubkeys)
+5. If all checks pass: open bidirectional pipe, immediately discard all channel state (token and any verification inputs)
 6. If any check fails: drop BOTH connections, discard all channel state
 
-**Privacy note:** The relay holds bare public keys (with no GitHub username attached) for at most `admission_window` (default 5 minutes) during the channel admission phase. This is a narrower exposure window than authentication, and the pubkeys carry no identity information without the username mapping that was discarded in §6.6. All pubkey material is discarded the moment the pipe opens or the admission times out.
+**Privacy note:** The relay sees bare public keys (with no GitHub username attached) during the channel admission proof check, but does not retain them in `pending_channels`. They are discarded immediately after proof verification.
 
 ### 7.5 Properties
 
@@ -297,7 +297,7 @@ If a channel join times out or the relay returns `{"type":"error","code":"channe
 When a client presents a channel join (see §7.4), and no pending entry exists for this `channel_token`:
 
 1. The relay verifies the proof as described in §7.4 (first arrival)
-2. The relay creates: `{ channel_token -> { proof, pubkey_1, socket, arrived_at } }`
+2. The relay creates: `{ channel_token -> { socket, arrived_at } }`
 3. The `arrived_at` timestamp is set to `now`. The pending channel entry MUST be deleted if no second party arrives within `admission_window` (default 5 minutes)
 4. The relay sends `{"type":"waiting","expires_in_seconds":300}` to the first party
 
@@ -306,7 +306,7 @@ When a client presents a channel join (see §7.4), and no pending entry exists f
 When a second client presents the same `channel_token`:
 
 1. The relay verifies the proof as described in §7.4 (second arrival)
-2. If all checks pass: the relay opens a bidirectional pipe between the two sockets and MUST immediately discard all channel state — channel token, both proofs, both pubkeys
+2. If all checks pass: the relay opens a bidirectional pipe between the two sockets and MUST immediately discard all channel state — channel token and verification inputs
 3. If any check fails: the relay closes BOTH connections with `{"type":"error","code":"auth_failed"}` and MUST discard all channel state
 
 Closing both connections on failure is deliberate: if one proof is invalid, the first party may also be compromised or confused.
@@ -332,7 +332,8 @@ If the recipient fails to decrypt the payload (auth tag mismatch), it closes the
 
 ### 8.4 Relay memory model
 
-At any given moment the relay holds **only** the following in memory:
+At any given moment the relay state is limited to the following in-memory
+structures:
 
 ```
 authenticated_connections: {
@@ -344,26 +345,44 @@ authenticated_connections: {
 
 pending_channels: {
   channel_token (32 bytes) -> {
-    proof:        channel_proof bytes,
-    pubkey_1:     first party's public key (no username attached),
     socket:       first party's WebSocket connection,
     arrived_at:   timestamp
   }
   // Max lifetime: admission_window (default 5 minutes)
   // Deleted immediately when pipe opens or times out
+  // Proofs and public keys are discarded immediately after verification.
 }
 
 active_pipes: {
   pipe_id (random) -> {
-    socket_a: WebSocket,
-    socket_b: WebSocket
+    conn_id_a: connection id,
+    conn_id_b: connection id,
+    socket_a:  WebSocket,
+    socket_b:  WebSocket
   }
   // No identity information whatsoever
   // Deleted immediately when either side closes
 }
+
+pipe_assignments: {
+  conn_id -> {
+    pipe_id:   pipe id,
+    is_side_a: bool
+  }
+  // Pure routing metadata used to forward frames after channel state is gone.
+  // Deleted immediately when the pipe closes or either side disconnects.
+}
+
+rate_limits: {
+  source_ip -> recent authentication attempt timestamps
+  // Operational abuse-prevention state only.
+  // No GitHub username, key, channel token, or pipe id is stored here.
+}
 ```
 
-That is the **complete** relay state. Nothing else is stored.
+That is the complete relay state. In particular, after authentication the relay
+does not retain GitHub usernames or authenticated public keys, and after channel
+admission it does not retain channel tokens, proofs, or pending public keys.
 
 ---
 
@@ -389,7 +408,13 @@ The payload is a JSON object containing one or more secrets:
 
 Both parties MUST have an Ed25519 SSH key on GitHub (see §4).
 
-A fresh ephemeral X25519 keypair is generated for every send operation. This provides forward secrecy — compromise of the recipient's long-term private key does not compromise past sessions.
+A fresh ephemeral X25519 keypair is generated for every send operation. This
+prevents key/nonce reuse and keeps each payload encryption independent.
+However, because the recipient side of the payload encryption uses the
+recipient's long-term SSH-derived X25519 key, this construction does **not**
+provide forward secrecy against later compromise of that private key. Shenan's
+harvest-now/decrypt-later protection comes from the relay not storing
+ciphertext, not from post-compromise secrecy of recorded payload bytes.
 
 ```
 shared_secret     = X25519(sender_ephemeral_private, recipient_ed25519_public)
@@ -634,9 +659,19 @@ The POC assumes a trusted, conforming relay. Against such a relay, even with com
 - Whether the same two parties have transacted before
 - Anything useful for a harvest-now-decrypt-later attack (there is nothing to harvest)
 
-### 13.2 Forward secrecy
+### 13.2 Payload key-compromise properties
 
-Each send operation generates a fresh ephemeral X25519 keypair. Compromise of the recipient's long-term private key does not expose past transmissions.
+Each send operation generates a fresh ephemeral X25519 keypair, so payload
+encryption keys are independent across sends. The wire payload includes the
+sender's ephemeral X25519 public key, and the recipient static key is derived
+from the recipient's long-term SSH private key. Therefore, anyone who records a
+wire payload and later compromises the recipient's private key can decrypt that
+recorded payload.
+
+The POC's HNDL defense is structural: a conforming relay does not persist
+ciphertext, so there should be no relay-side archive of wire payloads to
+decrypt later. Endpoint, network, terminal, or logging captures remain outside
+that guarantee.
 
 ### 13.3 Channel token collision resistance
 

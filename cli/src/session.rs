@@ -5,9 +5,11 @@ use base64::Engine;
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use futures_util::{SinkExt, StreamExt};
 use sha2::{Digest, Sha256};
+use std::time::Duration;
 use tokio_tungstenite::tungstenite::Message;
 
 use shenan_proto::channel;
+use shenan_proto::payload::{self, Payload};
 use shenan_proto::ssh;
 use shenan_proto::wire;
 
@@ -22,8 +24,8 @@ pub enum Role {
 pub enum SessionResult {
     /// Sender: payload was delivered and ACKed.
     Delivered,
-    /// Receiver: received wire payload bytes.
-    Received(Vec<u8>),
+    /// Receiver: decrypted and validated payload.
+    Received(Payload),
 }
 
 /// Run a full session: connect → auth → channel → pipe.
@@ -153,28 +155,29 @@ where
         match wire::Message::from_json(&resp)? {
             wire::Message::Waiting { expires_in_seconds } => {
                 eprintln!("Waiting for other party... (timeout: {expires_in_seconds}s)");
-                // Wait for connected
-                let connected_msg = read_text_message_raw(stream).await?;
-                match wire::Message::from_json(&connected_msg)? {
-                    wire::Message::Connected => {
-                        return handle_pipe(sink, stream, role, payload_data).await;
+                match wait_for_connected_or_expired(stream, expires_in_seconds).await? {
+                    ChannelWait::Connected => {
+                        return handle_pipe(
+                            sink,
+                            stream,
+                            role,
+                            payload_data,
+                            signing_key,
+                            sender_pub,
+                        )
+                        .await;
                     }
-                    wire::Message::Error { code, .. }
-                        if code == wire::error_codes::CHANNEL_EXPIRED && attempt < 2 =>
-                    {
-                        continue; // try next window
-                    }
-                    wire::Message::Error { code, message } => {
+                    ChannelWait::Expired if attempt < 2 => continue,
+                    ChannelWait::Expired => {
                         anyhow::bail!(
-                            "channel error: {code}{}",
-                            message.map(|m| format!(" — {m}")).unwrap_or_default()
-                        );
+                            "failed to join channel after trying current and adjacent time windows"
+                        )
                     }
-                    other => anyhow::bail!("unexpected: {other:?}"),
                 }
             }
             wire::Message::Connected => {
-                return handle_pipe(sink, stream, role, payload_data).await;
+                return handle_pipe(sink, stream, role, payload_data, signing_key, sender_pub)
+                    .await;
             }
             wire::Message::Error { code, .. }
                 if code == wire::error_codes::CHANNEL_EXPIRED && attempt < 2 =>
@@ -194,11 +197,54 @@ where
     anyhow::bail!("failed to join channel after trying current and adjacent time windows")
 }
 
+enum ChannelWait {
+    Connected,
+    Expired,
+}
+
+async fn wait_for_connected_or_expired<R>(
+    stream: &mut R,
+    expires_in_seconds: u64,
+) -> Result<ChannelWait>
+where
+    R: StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
+{
+    if expires_in_seconds == 0 {
+        return Ok(ChannelWait::Expired);
+    }
+
+    let connected_msg = match tokio::time::timeout(
+        Duration::from_secs(expires_in_seconds),
+        read_text_message_raw(stream),
+    )
+    .await
+    {
+        Ok(msg) => msg?,
+        Err(_) => return Ok(ChannelWait::Expired),
+    };
+
+    match wire::Message::from_json(&connected_msg)? {
+        wire::Message::Connected => Ok(ChannelWait::Connected),
+        wire::Message::Error { code, .. } if code == wire::error_codes::CHANNEL_EXPIRED => {
+            Ok(ChannelWait::Expired)
+        }
+        wire::Message::Error { code, message } => {
+            anyhow::bail!(
+                "channel error: {code}{}",
+                message.map(|m| format!(" — {m}")).unwrap_or_default()
+            );
+        }
+        other => anyhow::bail!("unexpected: {other:?}"),
+    }
+}
+
 async fn handle_pipe<S, R>(
     sink: &mut S,
     stream: &mut R,
     role: Role,
     payload_data: Option<Vec<u8>>,
+    signing_key: &SigningKey,
+    expected_sender_pubkey: &VerifyingKey,
 ) -> Result<SessionResult>
 where
     S: SinkExt<Message> + Unpin,
@@ -233,7 +279,17 @@ where
         }
         Role::Receiver => {
             // Wait for binary payload
-            let payload = read_binary_message(stream).await?;
+            let wire_payload = read_binary_message(stream).await?;
+
+            let payload =
+                match validate_received_payload(&wire_payload, signing_key, expected_sender_pubkey)
+                {
+                    Ok(payload) => payload,
+                    Err(e) => {
+                        let _ = sink.send(Message::Close(None)).await;
+                        return Err(e);
+                    }
+                };
 
             // Send received ACK
             let ack = wire::Message::Received;
@@ -246,6 +302,34 @@ where
             Ok(SessionResult::Received(payload))
         }
     }
+}
+
+fn validate_received_payload(
+    wire_payload: &[u8],
+    signing_key: &SigningKey,
+    expected_sender_pubkey: &VerifyingKey,
+) -> Result<Payload> {
+    let payload = payload::decrypt(wire_payload, signing_key)
+        .context("failed to decrypt payload — the sender may not have your correct public key")?;
+    let expected_sender_fingerprint = fingerprint_for_pubkey(expected_sender_pubkey);
+    if payload.sender_pubkey_fingerprint != expected_sender_fingerprint {
+        anyhow::bail!(
+            "sender fingerprint mismatch: got {}, expected {}",
+            payload.sender_pubkey_fingerprint,
+            expected_sender_fingerprint
+        );
+    }
+    Ok(payload)
+}
+
+fn fingerprint_for_pubkey(pubkey: &VerifyingKey) -> String {
+    let key_bytes = pubkey.to_bytes();
+    shenan_proto::ssh::SshEd25519PubKey {
+        key_bytes,
+        wire_bytes: ssh::ed25519_to_ssh_wire(&key_bytes),
+        original_line: String::new(),
+    }
+    .fingerprint()
 }
 
 async fn read_text_message<R>(stream: &mut R) -> Result<String>
@@ -284,5 +368,221 @@ where
             Some(Err(e)) => anyhow::bail!("WebSocket error: {e}"),
             None => anyhow::bail!("connection closed"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::collections::BTreeMap;
+    use std::pin::Pin;
+    use std::sync::{Arc, Mutex};
+    use std::task::{Context, Poll};
+
+    use ed25519_dalek::SigningKey;
+    use futures_util::{stream, Sink};
+    use rand::rngs::OsRng;
+
+    #[derive(Clone, Default)]
+    struct RecordingSink {
+        messages: Arc<Mutex<Vec<Message>>>,
+    }
+
+    impl RecordingSink {
+        fn messages(&self) -> Vec<Message> {
+            self.messages.lock().unwrap().clone()
+        }
+    }
+
+    impl Sink<Message> for RecordingSink {
+        type Error = std::io::Error;
+
+        fn poll_ready(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<std::result::Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn start_send(self: Pin<&mut Self>, item: Message) -> std::result::Result<(), Self::Error> {
+            self.messages.lock().unwrap().push(item);
+            Ok(())
+        }
+
+        fn poll_flush(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<std::result::Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_close(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<std::result::Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn receiver_does_not_ack_payload_that_cannot_be_decrypted() {
+        let sender = SigningKey::generate(&mut OsRng);
+        let receiver = SigningKey::generate(&mut OsRng);
+        let mut sink = RecordingSink::default();
+        let sent_messages = sink.clone();
+        let invalid_wire_payload = vec![0u8; 64];
+        let mut stream = stream::iter(vec![Ok(Message::Binary(invalid_wire_payload))]);
+
+        let result = handle_pipe(
+            &mut sink,
+            &mut stream,
+            Role::Receiver,
+            None,
+            &receiver,
+            &sender.verifying_key(),
+        )
+        .await;
+
+        assert!(
+            result.is_err(),
+            "receiver should reject payload before acknowledging delivery"
+        );
+        assert!(
+            !has_received_ack(&sent_messages.messages()),
+            "receiver must not send a received ACK for an undecryptable payload"
+        );
+    }
+
+    #[tokio::test]
+    async fn receiver_does_not_ack_payload_with_wrong_sender_fingerprint() {
+        let sender = SigningKey::generate(&mut OsRng);
+        let impostor = SigningKey::generate(&mut OsRng);
+        let receiver = SigningKey::generate(&mut OsRng);
+        let mut secrets = BTreeMap::new();
+        secrets.insert("API_KEY".to_string(), "secret".to_string());
+        let payload = Payload::new(secrets, fingerprint_for_pubkey(&impostor.verifying_key()));
+        let wire_payload = payload::encrypt(&payload, &receiver.verifying_key()).unwrap();
+
+        let mut sink = RecordingSink::default();
+        let sent_messages = sink.clone();
+        let mut stream = stream::iter(vec![Ok(Message::Binary(wire_payload))]);
+
+        let result = handle_pipe(
+            &mut sink,
+            &mut stream,
+            Role::Receiver,
+            None,
+            &receiver,
+            &sender.verifying_key(),
+        )
+        .await;
+
+        assert!(
+            result.is_err(),
+            "receiver should reject payload before acknowledging delivery"
+        );
+        assert!(
+            !has_received_ack(&sent_messages.messages()),
+            "receiver must not send a received ACK for a sender fingerprint mismatch"
+        );
+    }
+
+    #[tokio::test]
+    async fn receiver_acks_after_decrypting_and_validating_payload() {
+        let sender = SigningKey::generate(&mut OsRng);
+        let receiver = SigningKey::generate(&mut OsRng);
+        let mut secrets = BTreeMap::new();
+        secrets.insert("API_KEY".to_string(), "secret".to_string());
+        let payload = Payload::new(
+            secrets.clone(),
+            fingerprint_for_pubkey(&sender.verifying_key()),
+        );
+        let wire_payload = payload::encrypt(&payload, &receiver.verifying_key()).unwrap();
+
+        let mut sink = RecordingSink::default();
+        let sent_messages = sink.clone();
+        let mut stream = stream::iter(vec![Ok(Message::Binary(wire_payload))]);
+
+        let result = handle_pipe(
+            &mut sink,
+            &mut stream,
+            Role::Receiver,
+            None,
+            &receiver,
+            &sender.verifying_key(),
+        )
+        .await
+        .unwrap();
+
+        match result {
+            SessionResult::Received(received) => {
+                assert_eq!(received.secrets, secrets);
+            }
+            SessionResult::Delivered => panic!("receiver should not return sender result"),
+        }
+        assert!(
+            has_received_ack(&sent_messages.messages()),
+            "receiver should ACK only after payload validation succeeds"
+        );
+    }
+
+    #[tokio::test]
+    async fn channel_join_retries_adjacent_windows_after_waiting_expires() {
+        let sender = SigningKey::generate(&mut OsRng);
+        let receiver = SigningKey::generate(&mut OsRng);
+        let mut sink = RecordingSink::default();
+        let sent_messages = sink.clone();
+        let waiting = wire::Message::Waiting {
+            expires_in_seconds: 0,
+        }
+        .to_json()
+        .unwrap();
+        let mut stream = stream::iter(vec![
+            Ok(Message::Text(waiting.clone())),
+            Ok(Message::Text(waiting.clone())),
+            Ok(Message::Text(waiting)),
+        ]);
+
+        let result = try_channel_join(
+            &mut sink,
+            &mut stream,
+            &sender,
+            &sender.verifying_key(),
+            &receiver.verifying_key(),
+            Role::Sender,
+            Some(Vec::new()),
+        )
+        .await;
+
+        assert!(result.is_err(), "all expired windows should fail the join");
+        assert_eq!(
+            channel_join_count(&sent_messages.messages()),
+            3,
+            "client should try current, previous, and next windows"
+        );
+    }
+
+    fn has_received_ack(messages: &[Message]) -> bool {
+        messages.iter().any(|msg| {
+            matches!(
+                msg,
+                Message::Text(text)
+                    if matches!(wire::Message::from_json(text), Ok(wire::Message::Received))
+            )
+        })
+    }
+
+    fn channel_join_count(messages: &[Message]) -> usize {
+        messages
+            .iter()
+            .filter(|msg| {
+                matches!(
+                    msg,
+                    Message::Text(text)
+                        if matches!(wire::Message::from_json(text), Ok(wire::Message::Channel { .. }))
+                )
+            })
+            .count()
     }
 }

@@ -27,6 +27,7 @@ fn test_config() -> RelayConfig {
         bind: "127.0.0.1:0".to_string(),
         tls_cert: None,
         tls_key: None,
+        allow_plaintext: true,
         admission_window: Duration::from_secs(30),
         session_expiry: Duration::from_secs(60),
         max_payload_size: 1024 * 1024,
@@ -467,6 +468,68 @@ async fn payload_too_large_rejected() {
 }
 
 #[tokio::test]
+async fn payload_too_large_closes_peer_socket() {
+    let alice_key = SigningKey::generate(&mut OsRng);
+    let bob_key = SigningKey::generate(&mut OsRng);
+    let alice_pub = alice_key.verifying_key();
+    let bob_pub = bob_key.verifying_key();
+
+    let cache = test_cache(&[("alice", &alice_key), ("bob", &bob_key)]);
+
+    let mut config = test_config();
+    config.max_payload_size = 64;
+
+    let (addr, _handle) = shenan_relay::server::run_test(config, cache).await.unwrap();
+    let url = format!("ws://{addr}");
+
+    let window = channel::current_window();
+
+    let (mut alice_sink, mut alice_stream) = connect_and_auth(&url, &alice_key, "alice").await;
+    let (mut bob_sink, mut bob_stream) = connect_and_auth(&url, &bob_key, "bob").await;
+
+    let _ = send_channel_join(
+        &mut alice_sink,
+        &mut alice_stream,
+        &alice_key,
+        &alice_pub,
+        &bob_pub,
+        window,
+    )
+    .await;
+    let _ = send_channel_join(
+        &mut bob_sink,
+        &mut bob_stream,
+        &bob_key,
+        &alice_pub,
+        &bob_pub,
+        window,
+    )
+    .await;
+    let _ = read_text(&mut alice_stream).await;
+
+    alice_sink
+        .send(Message::Binary(vec![0u8; 128]))
+        .await
+        .unwrap();
+
+    let alice_resp = read_text(&mut alice_stream).await;
+    match wire::Message::from_json(&alice_resp).unwrap() {
+        wire::Message::Error { code, .. } => {
+            assert_eq!(code, wire::error_codes::PAYLOAD_TOO_LARGE);
+        }
+        other => panic!("expected payload_too_large, got: {other:?}"),
+    }
+
+    let bob_msg = tokio::time::timeout(Duration::from_millis(100), bob_stream.next())
+        .await
+        .expect("peer socket should be closed promptly after payload limit is exceeded");
+    assert!(
+        matches!(bob_msg, Some(Ok(Message::Close(_)))),
+        "expected peer close frame, got {bob_msg:?}"
+    );
+}
+
+#[tokio::test]
 async fn malformed_json_rejected() {
     let alice_key = SigningKey::generate(&mut OsRng);
     let cache = test_cache(&[("alice", &alice_key)]);
@@ -795,6 +858,112 @@ async fn session_expiry_blocks_channel_join() {
             assert_eq!(message.as_deref(), Some("session expired"));
         }
         other => panic!("expected session expired error, got: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn first_party_disconnect_removes_pending_channel() {
+    let alice_key = SigningKey::generate(&mut OsRng);
+    let bob_key = SigningKey::generate(&mut OsRng);
+    let alice_pub = alice_key.verifying_key();
+    let bob_pub = bob_key.verifying_key();
+
+    let cache = test_cache(&[("alice", &alice_key), ("bob", &bob_key)]);
+    let (addr, _handle) = shenan_relay::server::run_test(test_config(), cache)
+        .await
+        .unwrap();
+    let url = format!("ws://{addr}");
+
+    let window = channel::current_window();
+
+    let (mut alice_sink, mut alice_stream) = connect_and_auth(&url, &alice_key, "alice").await;
+    let alice_resp = send_channel_join(
+        &mut alice_sink,
+        &mut alice_stream,
+        &alice_key,
+        &alice_pub,
+        &bob_pub,
+        window,
+    )
+    .await;
+    assert!(matches!(alice_resp, wire::Message::Waiting { .. }));
+
+    alice_sink.send(Message::Close(None)).await.unwrap();
+    drop(alice_sink);
+    drop(alice_stream);
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    let (mut bob_sink, mut bob_stream) = connect_and_auth(&url, &bob_key, "bob").await;
+    let bob_resp = send_channel_join(
+        &mut bob_sink,
+        &mut bob_stream,
+        &bob_key,
+        &alice_pub,
+        &bob_pub,
+        window,
+    )
+    .await;
+
+    assert!(
+        matches!(bob_resp, wire::Message::Waiting { .. }),
+        "bob should become the first waiter after alice disconnects, got {bob_resp:?}"
+    );
+}
+
+#[tokio::test]
+async fn invalid_second_arrival_drops_both_connections() {
+    let alice_key = SigningKey::generate(&mut OsRng);
+    let bob_key = SigningKey::generate(&mut OsRng);
+    let imposter_key = SigningKey::generate(&mut OsRng);
+    let alice_pub = alice_key.verifying_key();
+    let bob_pub = bob_key.verifying_key();
+
+    let cache = test_cache(&[("alice", &alice_key), ("bob", &bob_key)]);
+    let (addr, _handle) = shenan_relay::server::run_test(test_config(), cache)
+        .await
+        .unwrap();
+    let url = format!("ws://{addr}");
+
+    let window = channel::current_window();
+
+    let (mut alice_sink, mut alice_stream) = connect_and_auth(&url, &alice_key, "alice").await;
+    let alice_resp = send_channel_join(
+        &mut alice_sink,
+        &mut alice_stream,
+        &alice_key,
+        &alice_pub,
+        &bob_pub,
+        window,
+    )
+    .await;
+    assert!(matches!(alice_resp, wire::Message::Waiting { .. }));
+
+    let (mut bob_sink, mut bob_stream) = connect_and_auth(&url, &bob_key, "bob").await;
+    let token = channel::derive_token(&bob_key, &alice_pub, &bob_pub, window);
+    let invalid_proof = channel::sign_token(&imposter_key, &token);
+    let bob_pub_wire = ssh::ed25519_to_ssh_wire(&bob_pub.to_bytes());
+    let bad_join = wire::Message::Channel {
+        token: hex::encode(*token),
+        proof: base64::engine::general_purpose::STANDARD.encode(invalid_proof.to_bytes()),
+        pubkey: base64::engine::general_purpose::STANDARD.encode(&bob_pub_wire),
+    };
+    bob_sink
+        .send(Message::Text(bad_join.to_json().unwrap()))
+        .await
+        .unwrap();
+
+    let bob_resp = read_text(&mut bob_stream).await;
+    match wire::Message::from_json(&bob_resp).unwrap() {
+        wire::Message::Error { code, .. } => assert_eq!(code, wire::error_codes::AUTH_FAILED),
+        other => panic!("expected auth_failed for invalid second arrival, got {other:?}"),
+    }
+
+    let alice_resp = tokio::time::timeout(Duration::from_millis(100), read_text(&mut alice_stream))
+        .await
+        .expect("first waiter should receive a terminal error after invalid second arrival");
+    match wire::Message::from_json(&alice_resp).unwrap() {
+        wire::Message::Error { code, .. } => assert_eq!(code, wire::error_codes::AUTH_FAILED),
+        other => panic!("expected auth_failed for first waiter, got {other:?}"),
     }
 }
 
